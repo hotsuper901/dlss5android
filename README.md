@@ -13,15 +13,16 @@ a frametime/RAM HUD on top of your game.
 
 | Feature | Implementation |
 |---|---|
-| Live CPU load | Differential reads of `/proc/stat` (cumulative-since-boot counters, differenced against the prior sample) |
 | Thermal state | `BatteryManager.BATTERY_PROPERTY_TEMPERATURE` with `/sys/class/thermal/thermal_zone*` fallback |
-| RAM reclaim | `System.gc()` + `runFinalization()` + `TRIM_MEMORY_RUNNING_CRITICAL` + `SIGUSR1` to ART |
+| RAM reclaim | `Runtime.gc()` + `TRIM_MEMORY_RUNNING_CRITICAL`, reporting a real before/after of device-wide `availMem` |
 | Never force-closed | Foreground service, `START_STICKY`, `FOREGROUND_SERVICE_SPECIAL_USE` |
 | Survives reboot | `BootReceiver` restarts it *only* if you left the toggle on |
-| Auto-arm on launch | `GameWatcher` polls the running-process table every 2s, trims 3.5s after a game appears |
-| On-screen HUD | `TYPE_APPLICATION_OVERLAY` window, finger-draggable, 500ms refresh |
+| Auto-arm on launch | `GameWatcher` reads `UsageEvents` every 1.2s, trims 4s after a game appears |
+| On-screen HUD | `TYPE_APPLICATION_OVERLAY` window, finger-draggable, 500ms refresh, sampled off the main thread |
 | Per-game presets | Battery / Balanced / Competitive, persisted, with a live recommendation engine |
-| Crash resistance | Every loop body wrapped in `runCatching`; a dead coroutine is the force-close bug, so none of them can die |
+| Thread safety | Every binder call and `/sys` read runs on `Dispatchers.Default`. The UI thread only ever renders |
+| No CPU meter | Deliberate. A sandboxed app cannot read trustworthy device-wide CPU, and a number that reads 0 while the phone is at 100% is worse than none |
+| Detection honesty | Without Usage access the state is `UNKNOWN_NO_PERMISSION`, never a fake "no game" |
 
 ## Build
 
@@ -46,6 +47,7 @@ Without them the release build falls back to the debug key so CI still runs.
 
 - `SYSTEM_ALERT_WINDOW` — draws the HUD above the game window
 - `FOREGROUND_SERVICE_SPECIAL_USE` + `POST_NOTIFICATIONS` — keeps the booster running
+- `PACKAGE_USAGE_STATS` — special access; the only way to see the foreground app on Android 5.1+
 - `RECEIVE_BOOT_COMPLETED` — restart after reboot
 - `QUERY_ALL_PACKAGES` — detect which supported game is installed
 - `WAKE_LOCK` — reserved for the HUD's tick loop

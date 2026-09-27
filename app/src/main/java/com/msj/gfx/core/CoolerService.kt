@@ -121,7 +121,7 @@ class CoolerService : Service() {
 
                 val detected = watcher.current.value?.label ?: "no game detected"
                 notify(buildNotification(
-                    "CPU ${s.cpuLoad}% - free ${s.freeRamMb} MB - $detected",
+                    "Free ${s.freeRamMb} MB - $detected",
                     (s.batteryTempC ?: s.cpuTempC)?.let { "${it.toInt()}\u00b0C" } ?: "temp n/a"
                 ))
             }

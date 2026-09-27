@@ -21,6 +21,14 @@ import android.widget.TextView
 import androidx.core.app.NotificationCompat
 import com.msj.gfx.MainActivity
 import com.msj.gfx.R
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Frametime / memory HUD drawn on top of whatever is on screen.
@@ -36,7 +44,7 @@ class GameOverlayService : android.app.Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var root: LinearLayout? = null
     private var wm: WindowManager? = null
-    private var tick: Runnable? = null
+    private var tickScope: CoroutineScope? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -65,8 +73,9 @@ class GameOverlayService : android.app.Service() {
     }
 
     override fun onDestroy() {
-        tick?.let { handler.removeCallbacks(it) }
-        tick = null
+        tickScope?.cancel()
+        tickScope = null
+        handler.removeCallbacksAndMessages(null)
         runCatching { root?.let { wm?.removeView(it) } }
         root = null
         super.onDestroy()
@@ -90,13 +99,10 @@ class GameOverlayService : android.app.Service() {
 
         panel.addView(label("MSJ GFX", 10f, Color.rgb(0, 229, 255)).apply { gravity = Gravity.END })
 
-        fpsView = label("-- FPS", 22f, Color.WHITE).apply {
+        msView = label("--\u00b0C", 18f, Color.rgb(61, 220, 151)).apply {
             gravity = Gravity.END
             typeface = android.graphics.Typeface.DEFAULT_BOLD
         }
-        panel.addView(fpsView)
-
-        msView = label("--.- ms", 12f, Color.rgb(61, 220, 151)).apply { gravity = Gravity.END }
         panel.addView(msView)
 
         ramView = label("RAM -- / --", 11f, Color.rgb(255, 194, 75)).apply { gravity = Gravity.END }
@@ -153,23 +159,33 @@ class GameOverlayService : android.app.Service() {
     }
 
     private fun startTicking() {
-        val r = object : Runnable {
-            override fun run() {
-                // Never let an exception in the HUD kill the service.
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        tickScope = scope
+        scope.launch {
+            while (scope.isActive) {
+                // sampleBlocking() reads /sys and makes a binder call. Doing
+                // that on the Handler thread freezes whatever is on screen
+                // underneath the HUD, which is exactly when the user least
+                // wants a stutter.
                 runCatching {
                     val s = PerfMonitor.sampleBlocking()
-                    fpsView?.text = "-- FPS"
-                    msView?.text = "%.1f ms".format(s.frameMs.coerceAtLeast(0f))
-                    ramView?.text = "RAM ${s.ramUsedMb} / ${s.ramTotalMb}"
-                    ramView?.setTextColor(
-                        if (s.ramPct >= 88) Color.rgb(255, 122, 69) else Color.rgb(255, 194, 75)
-                    )
+                    val free = s.freeRamMb
+                    val total = s.totalRamMb
+                    val pct = s.deviceRamPct
+                    val hot = s.throttling
+                    val temp = s.hottestC
+                    withContext(Dispatchers.Main) {
+                        msView?.text = temp?.let { "${it.toInt()}\u00b0C" } ?: "--\u00b0C"
+                        msView?.setTextColor(if (hot) Color.rgb(255, 122, 69) else Color.rgb(61, 220, 151))
+                        ramView?.text = "RAM $free / $total"
+                        ramView?.setTextColor(
+                            if (pct >= 88) Color.rgb(255, 122, 69) else Color.rgb(255, 194, 75)
+                        )
+                    }
                 }
-                handler.postDelayed(this, 500L)
+                delay(500)
             }
         }
-        tick = r
-        handler.post(r)
     }
 
     private fun label(text: String, sp: Float, color: Int) = TextView(this).apply {
@@ -217,7 +233,6 @@ class GameOverlayService : android.app.Service() {
             )
     }
 
-    private var fpsView: TextView? = null
     private var msView: TextView? = null
     private var ramView: TextView? = null
 

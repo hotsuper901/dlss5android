@@ -7,12 +7,14 @@ import com.msj.gfx.core.GameWatcher
 import com.msj.gfx.core.MemoryTools
 import com.msj.gfx.core.PerfMonitor
 import com.msj.gfx.core.PerfSnapshot
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class BoostViewModel : ViewModel() {
 
@@ -34,81 +36,85 @@ class BoostViewModel : ViewModel() {
     private val _watchState = MutableStateFlow(GameWatcher.State.UNKNOWN_NO_PERMISSION)
     val watchState = _watchState.asStateFlow()
 
+    private val _usageGranted = MutableStateFlow(false)
+    val usageGranted = _usageGranted.asStateFlow()
+
     private var sampleJob: Job? = null
     private var boostJob: Job? = null
+    private var permJob: Job? = null
     private var watcher: GameWatcher? = null
 
     init {
-        PerfMonitor.primeCpu()
-        sampleJob = viewModelScope.launch {
+        // Default would be Dispatchers.Main.immediate, which put gc() and the
+        // binder calls on the UI thread. That is what produced the ANR.
+        sampleJob = viewModelScope.launch(Dispatchers.Default) {
             while (isActive) {
                 runCatching { PerfMonitor.sample() }.onSuccess { _perf.value = it }
                 delay(1000)
             }
         }
+        refreshPermissions()
         startWatcher()
     }
 
     private fun startWatcher() {
         val w = GameWatcher(viewModelScope)
         watcher = w
-        viewModelScope.launch {
-            w.state.collect { _watchState.value = it }
-        }
-        viewModelScope.launch {
-            w.current.collect { _detected.value = it }
-        }
+        viewModelScope.launch { w.state.collect { _watchState.value = it } }
+        viewModelScope.launch { w.current.collect { _detected.value = it } }
         w.start()
     }
 
+    private fun refreshPermissions() {
+        permJob?.cancel()
+        permJob = viewModelScope.launch(Dispatchers.Default) {
+            _usageGranted.value = MemoryTools.hasUsageAccess()
+            watcher?.start()
+        }
+    }
+
     /**
-     * The press actually does three things and then says which of them landed,
-     * because "reclaimed 0 MB" with no explanation is what made this button
-     * look broken in the first place.
+     * Runs entirely off the main thread and reports exactly what happened.
+     * "Reclaimed 0 MB" with no explanation is what made this look broken.
      */
     fun boost() {
         if (_boosting.value || boostJob?.isActive == true) return
         _boosting.value = true
-        boostJob = viewModelScope.launch {
+        boostJob = viewModelScope.launch(Dispatchers.Default) {
             try {
                 val result = runCatching { MemoryTools.trim() }.getOrNull()
                 if (result == null) {
                     _log.value = "Trim failed - the platform refused the request"
                 } else {
                     _lastResult.value = result
-
-                    val detectedGame = _detected.value
-                    val target = detectedGame?.let { g ->
+                    val game = _detected.value
+                    val advice = game?.let { g ->
                         val free = MemoryTools.freeRamMb()
-                        if (free >= g.minFreeRamMb) null
-                        else "${g.label} wants ~${g.minFreeRamMb} MB free, you have $free MB - close apps"
+                        if (free < g.minFreeRamMb)
+                            "${g.label} wants ~${g.minFreeRamMb} MB free, you have $free MB - close apps"
+                        else null
                     }
-
-                    _log.value = listOfNotNull(
-                        result.note,
-                        target
-                    ).joinToString(". ")
+                    _log.value = listOfNotNull(result.note, advice).joinToString(". ")
                 }
             } finally {
-                delay(1100)
-                _boosting.value = false
+                withContext(Dispatchers.Main) {
+                    delay(900)
+                    _boosting.value = false
+                }
             }
         }
     }
 
-    /** User tapped the retry/refresh on the detection banner. */
+    /** User tapped RESCAN. */
     fun resyncDetection() {
-        PerfMonitor.primeCpu()
-        watcher?.start()
-        _log.value = if (MemoryTools.hasUsageAccess())
-            "Detection resynced"
-        else
-            "Grant Usage access in Settings to detect the running game"
+        refreshPermissions()
+        _log.value = "Rescanned - detection updates while a game is on screen"
     }
 
     override fun onCleared() {
         sampleJob?.cancel()
         boostJob?.cancel()
+        permJob?.cancel()
         watcher?.stop()
         super.onCleared()
     }

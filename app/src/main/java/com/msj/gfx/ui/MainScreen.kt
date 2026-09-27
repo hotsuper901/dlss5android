@@ -16,7 +16,7 @@ import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Radar
-import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.DeveloperBoard
 import androidx.compose.material.icons.filled.Thermostat
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
@@ -149,31 +149,37 @@ private fun DashTab(
         Header()
 
         Spacer(Modifier.height(16.dp))
-        DetectionCard(detected, watchState, usageGranted, onRequestUsageAccess, onResync)
+        DetectionCard(
+            detected, watchState, usageGranted, perf.freeRamMb, perf.lowMemory,
+            onRequestUsageAccess, onResync
+        )
 
         Spacer(Modifier.height(16.dp))
         DeviceRamBar(perf.freeRamMb, perf.deviceRamPct, perf.lowMemory)
 
         Spacer(Modifier.height(12.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            StatTile(Icons.Filled.Speed, "CPU", "${perf.cpuLoad}%", Modifier.weight(1f))
-            val t = perf.batteryTempC ?: perf.cpuTempC
             StatTile(
                 Icons.Filled.Thermostat, "TEMP",
-                t?.let { "${it.roundToInt()}°" } ?: "--", Modifier.weight(1f),
-                alert = t != null && t >= 42f
+                perf.hottestC?.let { "${it.roundToInt()}\u00b0" } ?: "--",
+                Modifier.weight(1f),
+                alert = perf.throttling
             )
             StatTile(
                 Icons.Filled.Memory, "FREE",
                 "${perf.freeRamMb}M", Modifier.weight(1f),
                 alert = perf.lowMemory
             )
+            StatTile(
+                Icons.Filled.DeveloperBoard, "SOC",
+                perf.soc.take(7), Modifier.weight(1f)
+            )
         }
 
         if (perf.throttling) {
             Spacer(Modifier.height(12.dp))
             Notice(
-                "Thermal throttling detected (${(perf.batteryTempC ?: perf.cpuTempC ?: 0f).roundToInt()}°C). " +
+                "Thermal throttling detected (${perf.hottestC?.roundToInt() ?: 0}\u00b0C). " +
                     "The SoC is dropping below its boost clock right now - set ${preset.inGameGraphics} in-game.",
                 WarnYellow
             )
@@ -188,7 +194,7 @@ private fun DashTab(
             PresetRow(
                 p, p.key == preset.key,
                 onClick = { onPreset(p) },
-                quality = MemoryTools.recommendQuality(perf.cpuLoad, perf.deviceRamPct, perf.batteryTempC ?: perf.cpuTempC)
+                quality = MemoryTools.recommendQuality(perf.deviceRamPct, perf.hottestC, perf.charging)
             )
         }
 
@@ -232,6 +238,8 @@ private fun DetectionCard(
     detected: GameCatalog.Game?,
     state: com.msj.gfx.core.GameWatcher.State,
     usageGranted: Boolean,
+    freeRamMb: Int,
+    lowMemory: Boolean,
     onRequestUsageAccess: () -> Unit,
     onResync: () -> Unit
 ) {
@@ -299,11 +307,17 @@ private fun DetectionCard(
                     fontSize = 17.sp, fontWeight = FontWeight.Black, color = Ink
                 )
                 Text(detected.packageName, fontSize = 10.sp, color = Muted)
-                val free = MemoryTools.freeRamMb()
+                // freeRamMb is the value already sampled off the main thread.
+                // Querying ActivityManager inside a composable is a binder call
+                // during composition, which is exactly how you get a dropped
+                // frame on a phone that is already struggling.
+                val free = freeRamMb
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    if (free >= detected.minFreeRamMb)
+                    if (free >= detected.minFreeRamMb && !lowMemory)
                         "Healthy - $free MB free, this title wants ~${detected.minFreeRamMb} MB"
+                    else if (lowMemory)
+                        "Android reports low memory - $free MB free, this title wants ~${detected.minFreeRamMb} MB"
                     else
                         "Under-provisioned - $free MB free, this title wants ~${detected.minFreeRamMb} MB",
                     fontSize = 12.sp,
@@ -605,17 +619,17 @@ private fun HudTab(
                 shape = RoundedCornerShape(14.dp)
             ) { Text("GRANT OVERLAY PERMISSION", fontWeight = FontWeight.Black, fontSize = 12.sp) }
         } else {
-            ToggleRow("Show HUD over games", "CPU, frametime and RAM while you play", overlayOn, onToggleOverlay)
+            ToggleRow("Show HUD over games", "Temperature and free RAM while you play", overlayOn, onToggleOverlay)
         }
 
         Spacer(Modifier.height(16.dp))
         Text("WHAT THE HUD SHOWS", fontSize = 12.sp, color = Muted, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
         listOf(
-            "Live CPU load, sampled differentially from /proc/stat",
-            "Frametime in milliseconds - the number that actually predicts stutter",
-            "RAM used vs total, turning red past 88% where texture thrash starts",
-            "Thermal state, because 45C and climbing means 40fps regardless of quality setting"
+            "Hottest thermal reading, from the battery NTC with a CPU-zone fallback",
+            "Temperature turning orange past 42C, where the SoC drops its boost clocks",
+            "Device-wide free RAM, the number a game actually allocates its textures from",
+            "Everything sampled off the main thread, so the HUD never adds the stutter it is meant to measure"
         ).forEach {
             Row(Modifier.padding(vertical = 5.dp)) {
                 Text("›  ", color = NeonCyan, fontWeight = FontWeight.Black)
@@ -649,7 +663,8 @@ private fun AboutTab() {
             "Those memory readers change nothing permanently. The values are re-validated on the next match, so the \"60 FPS Ultra\" lasts one round and then the account is flagged.",
             "Accounts caught using them are banned in roughly three to ten minutes, and the ban is usually a hardware-level ID ban that survives a reinstall.",
             "Freeing RAM, staying out of thermal throttle, and using the game's own graphics menu is where actual frames come from. That is the part this app automates.",
-            "The HUD is drawn with a normal user-granted overlay window. Nothing is injected into the game process, because nothing needs to be."
+            "The HUD is drawn with a normal user-granted overlay window. Nothing is injected into the game process, because nothing needs to be.",
+            "Boost reclaims our own heap and asks the platform to trim. It cannot make your game release memory, and it will not pretend otherwise - the number it reports is a real before-and-after of device-wide available RAM."
         ).forEach {
             Row(Modifier.padding(vertical = 5.dp)) {
                 Text("›  ", color = NeonCyan, fontWeight = FontWeight.Black)

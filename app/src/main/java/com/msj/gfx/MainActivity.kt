@@ -13,6 +13,10 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.msj.gfx.core.CoolerService
 import com.msj.gfx.core.GameCatalog
 import com.msj.gfx.core.GameOverlayService
@@ -39,7 +43,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         SettingsStore.get().markRun()
-        refreshPerms()
+        perms = Perms(overlay = overlayGrantedNow(), usage = false)
 
         setContent {
             MsjTheme {
@@ -93,18 +97,15 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         // The user just came back from Settings, possibly with new grants.
-        refreshPerms()
+        // hasUsageAccess() is a binder call plus a cursor walk, so it goes to a
+        // background thread - doing it inline here is launch-time jank.
+        lifecycleScope.launch {
+            val usage = withContext(Dispatchers.Default) { MemoryTools.hasUsageAccess() }
+            perms = Perms(overlay = perms.overlay, usage = usage)
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && perms.overlay) {
             if (SettingsStore.get().overlayOn.value) GameOverlayService.start(this)
         }
-    }
-
-    private fun refreshPerms() {
-        perms = Perms(
-            overlay = Build.VERSION.SDK_INT < Build.VERSION_CODES.M ||
-                Settings.canDrawOverlays(this),
-            usage = MemoryTools.hasUsageAccess()
-        )
     }
 
     private fun requestOverlay() {

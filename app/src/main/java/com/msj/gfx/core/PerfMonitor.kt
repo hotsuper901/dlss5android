@@ -8,113 +8,94 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 
+/**
+ * What we measure, and what we deliberately do not.
+ *
+ * CPU load used to be read here by differencing /proc/stat. It was removed and
+ * it is not coming back: three callers sampled at three different rates
+ * (1Hz dashboard, 500ms overlay, 4s service) all advancing one shared
+ * differential baseline, so every caller consumed the delta and the others read
+ * zero. Even done properly, a sandboxed app cannot get a trustworthy
+ * device-wide CPU figure, and shipping a number that reads 0 while the phone is
+ * clearly at 100% is worse than shipping nothing.
+ *
+ * What is left is the two signals that actually predict stutter in a match:
+ * thermal state and available memory.
+ */
 data class PerfSnapshot(
-    val cpuLoad: Int = 0,             // 0..100 across all cores
-    val cpuTempC: Float? = null,      // thermal_zone cpu average, null if hidden
-    val batteryTempC: Float? = null,  // BatteryManager, most reliable on modern devices
-    val ramUsedMb: Int = 0,          // our own Java heap
-    val ramTotalMb: Int = 0,
-    val ramPct: Int = 0,
-    val freeRamMb: Int = 0,          // device-wide available - the number games care about
-    val deviceRamPct: Int = 0,       // device-wide usage
-    val lowMemory: Boolean = false,
-    val fps: Int = 0,                 // only meaningful while a game is foregrounded
-    val frameMs: Float = 0f,          // rolling frametime average
+    val cpuTempC: Float? = null,      // thermal_zone average, null if the ROM hides it
+    val batteryTempC: Float? = null,  // battery NTC, more accurate when present
+    val freeRamMb: Int = 0,           // device-wide available
+    val totalRamMb: Int = 0,
+    val deviceRamPct: Int = 0,        // device-wide usage
+    val lowMemory: Boolean = false,   // ActivityManager's own lowMemory flag
     val charging: Boolean = false,
-    val throttling: Boolean = false,  // 42C+ and climbing == the 40fps killer
-    val soc: String = "UNKNOWN",
-    val foregroundPkg: String? = null
-)
+    val throttling: Boolean = false,  // 42C+ == the 40fps killer
+    val soc: String = "UNKNOWN"
+) {
+    /** The number to show as the headline figure. */
+    val hottestC: Float? get() = maxOf(batteryTempC ?: 0f, cpuTempC ?: 0f)
+        .takeIf { (batteryTempC ?: cpuTempC) != null }
+}
 
 object PerfMonitor {
 
-    private var lastCpuTotal = 0L
-    private var lastIdleTotal = 0L
-    private var primed = false
-
-    /** Smoothing so the bar doesn't strobe between 20 and 90. */
-    private var smoothedCpu = 0.0
     private var lastBatteryTemp: Float? = null
 
     suspend fun sample(): PerfSnapshot = withContext(Dispatchers.Default) {
-        val rt = Runtime.getRuntime()
-        val used = (rt.totalMemory() - rt.freeMemory()) / 1_048_576L
-        val total = (rt.maxMemory() / 1_048_576L)
-        val pct = if (total > 0) ((used * 100) / total).toInt().coerceIn(0, 100) else 0
-
-        val load = sampleCpuLoad()
         val batt = battery()
-        val battTemp = batt.first
-        val charging = batt.second
         val zoned = cpuTempZone()
-
-        // Battery NTC is more accurate when present; the zone is a decent fallback.
-        val temp = battTemp ?: zoned
-        val throttling = temp != null && temp >= 42f
-
-        val freeDevice = MemoryTools.freeRamMb()
+        val temp = batt.first ?: zoned
 
         PerfSnapshot(
-            cpuLoad = load,
             cpuTempC = zoned,
-            batteryTempC = battTemp,
-            ramUsedMb = used.toInt(),
-            ramTotalMb = total.toInt(),
-            ramPct = pct,
-            freeRamMb = freeDevice,
+            batteryTempC = batt.first,
+            freeRamMb = MemoryTools.freeRamMb(),
+            totalRamMb = MemoryTools.totalRamMb(),
             deviceRamPct = MemoryTools.ramPressurePct(),
             lowMemory = MemoryTools.isLowMemory(),
-            charging = charging,
-            throttling = throttling,
+            charging = batt.second,
+            throttling = temp != null && temp >= THROTTLE_C,
             soc = socName()
         )
     }
 
     /**
-     * Differential read of /proc/stat. This is the correct way - the naive
-     * "read jiffies, divide by elapsed" approach every tutorial shows returns
-     * garbage because the counters are cumulative since boot.
+     * Non-suspend variant. Callers MUST be off the main thread: this touches
+     * /sys and issues a binder call, and doing it on the UI thread is an ANR.
      */
-    private fun sampleCpuLoad(): Int {
-        val txt = runCatching { File("/proc/stat").readText() }.getOrNull() ?: return 0
-        val line = txt.lineSequence().firstOrNull { it.startsWith("cpu ") } ?: return 0
-        val parts = line.trim().split(Regex("\\s+"))
-        if (parts.size < 5) return 0
-
-        var total = 0L
-        for (i in 1 until parts.size) total += parts[i].toLongOrNull() ?: 0L
-        val idle = (parts[4].toLongOrNull() ?: 0L) + (parts[5].toLongOrNull() ?: 0L)
-
-        if (!primed) {
-            lastCpuTotal = total
-            lastIdleTotal = idle
-            primed = true
-            return 0
-        }
-
-        val dTotal = total - lastCpuTotal
-        val dIdle = idle - lastIdleTotal
-        lastCpuTotal = total
-        lastIdleTotal = idle
-
-        if (dTotal <= 0L) return 0
-        val raw = (((dTotal - dIdle).toDouble() / dTotal.toDouble()) * 100.0)
-        smoothedCpu = smoothedCpu * 0.7 + raw * 0.3
-        return smoothedCpu.roundToInt().coerceIn(0, 100)
+    fun sampleBlocking(): PerfSnapshot {
+        val batt = battery()
+        val zoned = cpuTempZone()
+        val temp = batt.first ?: zoned
+        return PerfSnapshot(
+            cpuTempC = zoned,
+            batteryTempC = batt.first,
+            freeRamMb = MemoryTools.freeRamMb(),
+            totalRamMb = MemoryTools.totalRamMb(),
+            deviceRamPct = MemoryTools.ramPressurePct(),
+            lowMemory = MemoryTools.isLowMemory(),
+            charging = batt.second,
+            throttling = temp != null && temp >= THROTTLE_C,
+            soc = socName()
+        )
     }
 
+    /** Average of every CPU/SOC thermal zone. Null on ROMs that hide them. */
     fun cpuTempZone(): Float? = runCatching {
         val zones = File("/sys/class/thermal").listFiles() ?: return@runCatching null
         zones.asSequence()
             .filter { it.name.startsWith("thermal_zone") }
             .mapNotNull { z ->
                 val type = runCatching { File(z, "type").readText() }.getOrDefault("")
-                val temp = runCatching { File(z, "temp").readText().trim().toFloat() / 1000f }.getOrNull()
+                val temp = runCatching {
+                    File(z, "temp").readText().trim().toFloat() / 1000f
+                }.getOrNull()
                 if (temp == null) null else temp to type
             }
             .filter { (_, type) ->
                 type.contains("cpu", true) || type.contains("soc", true) ||
-                    type.contains("ap", true) || type.contains("bigcore", true)
+                    type.contains("ap", true) || type.contains("big", true)
             }
             .map { it.first }
             .toList()
@@ -124,8 +105,8 @@ object PerfMonitor {
     }.getOrNull()
 
     private fun battery(): Pair<Float?, Boolean> = runCatching {
-        // Sticky broadcast rather than BatteryManager.getIntProperty: the sticky
-        // intent works identically from API 21 up and needs no version gate.
+        // Sticky broadcast rather than BatteryManager.getIntProperty - identical
+        // on every API level we support, and no version gate.
         val intent = Ctx.get().registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         val t = intent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, Int.MIN_VALUE)
             ?.takeIf { it in -400..2500 }
@@ -137,53 +118,17 @@ object PerfMonitor {
         lastBatteryTemp to charging
     }.getOrDefault(lastBatteryTemp to false)
 
-    /** Trims the marketing string down to something that fits in a tile. */
     private fun socName(): String = runCatching {
-        // Build.SOC_MANUFACTURER only exists from API 31. Touching it on Android
-        // 7-11 is a NoSuchFieldError at runtime, so gate it and fall back.
+        // Build.SOC_MANUFACTURER only exists from API 31; touching it below that
+        // is a NoSuchFieldError, so gate it and fall back to HARDWARE.
         val raw = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             Build.SOC_MANUFACTURER.ifEmpty { Build.HARDWARE }
         } else {
             Build.HARDWARE
         }
         if (raw.isBlank()) "UNKNOWN"
-        else raw.uppercase()
-            .replace("SM", "S")
-            .replace("MSM", "M")
-            .replace("QP", "Q")
-            .take(9)
+        else raw.uppercase().take(9)
     }.getOrDefault("UNKNOWN")
 
-    private fun Double.roundToInt() = kotlin.math.round(this).toInt()
-
-    /**
-     * Non-suspend variant for the overlay's Handler loop, which cannot call
-     * runBlocking on the main thread without a frame hitch.
-     */
-    fun sampleBlocking(): PerfSnapshot {
-        val rt = Runtime.getRuntime()
-        val used = (rt.totalMemory() - rt.freeMemory()) / 1_048_576L
-        val total = (rt.maxMemory() / 1_048_576L)
-        val load = sampleCpuLoad()
-        val batt = battery()
-        val zoned = cpuTempZone()
-        val temp = batt.first ?: zoned
-        return PerfSnapshot(
-            cpuLoad = load,
-            cpuTempC = zoned,
-            batteryTempC = batt.first,
-            ramUsedMb = used.toInt(),
-            ramTotalMb = total.toInt(),
-            ramPct = if (total > 0) ((used * 100) / total).toInt() else 0,
-            freeRamMb = MemoryTools.freeRamMb(),
-            deviceRamPct = MemoryTools.ramPressurePct(),
-            lowMemory = MemoryTools.isLowMemory(),
-            charging = batt.second,
-            throttling = (temp ?: 0f) >= 42f,
-            soc = socName()
-        )
-    }
-
-    /** Exposed for the overlay's frametime ring. */
-    fun primeCpu() { primed = false }
+    const val THROTTLE_C = 42f
 }
