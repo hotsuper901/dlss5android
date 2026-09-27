@@ -1,6 +1,7 @@
 package com.msj.gfx.core
 
 import android.app.ActivityManager
+import android.app.AppOpsManager
 import android.app.Application
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
@@ -99,14 +100,19 @@ object MemoryTools {
      * app's getRunningAppProcesses() returns exactly one entry - our own - so
      * anything built on it could never have seen Free Fire.
      */
-    fun foregroundPackage(): String? {
+    fun foregroundPackage(windowMs: Long = 120_000L): String? {
         if (!hasUsageAccess()) return null
         return runCatching {
             val usm = Ctx.get().getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
             val now = System.currentTimeMillis()
-            val events = usm.queryEvents(now - 4_000L, now)
+            // The window used to be 4 seconds. That is far too narrow to be
+            // useful: if you launched the game thirty seconds ago there is no
+            // event in range at all, so the answer was null no matter what was
+            // on screen. Two minutes covers a normal session comfortably.
+            val events = usm.queryEvents(now - windowMs, now)
             val event = UsageEvents.Event()
             var best: Pair<String, Long>? = null
+            val self = Ctx.get().packageName
             while (events.hasNextEvent()) {
                 events.getNextEvent(event)
                 val pkg = event.packageName ?: continue
@@ -115,9 +121,7 @@ object MemoryTools {
                 val isForeground =
                     event.eventType == UsageEvents.Event.ACTIVITY_RESUMED ||
                         event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND
-                // Skip our own package: the booster is a foreground service and
-                // would otherwise win the race against the game.
-                if (isForeground && pkg != Ctx.get().packageName) {
+                if (isForeground && pkg != self) {
                     val prev = best
                     if (prev == null || event.timeStamp > prev.second) best = pkg to event.timeStamp
                 }
@@ -127,12 +131,9 @@ object MemoryTools {
     }
 
     /** The supported game on screen, or null. Null is normal, not an error. */
-    fun foregroundGame(): GameCatalog.Game? {
-        val pkg = foregroundPackage() ?: return null
-        return GameCatalog.match(pkg)
-    }
+    fun foregroundGame(): GameCatalog.Game? = GameDetector.poll()?.game
 
-    fun isAnyGameRunning(): Boolean = foregroundGame() != null
+    fun isAnyGameRunning(): Boolean = GameDetector.poll()?.game != null
 
     /**
      * Whether Usage access has been granted.
@@ -140,17 +141,48 @@ object MemoryTools {
      * Probed by looking for one of our own events in the last 60s. This is a
      * binder call plus a cursor walk - do not call it from the UI thread.
      */
+    /**
+     * Whether Usage access has actually been granted.
+     *
+     * This used to infer the answer by scanning usage events for our own
+     * package, on the theory that we would only appear if we had permission.
+     * That is wrong in a way that matters: our own package only shows up if we
+     * generated an event inside the window, so the check reports "not granted"
+     * for the first couple of minutes after the user grants it, and again any
+     * time we have been idle. The user taps RESCAN, the app says no, and the
+     * detector looks broken when it is actually fine.
+     *
+     * AppOps is the authoritative answer. The event probe is kept only as a
+     * fallback for OEM ROMs that report the op incorrectly.
+     */
     fun hasUsageAccess(): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return false
+        val ctx = Ctx.get()
+
+        val byAppOps = runCatching {
+            val appOps = ctx.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+            // The String overload is the only one that exists in the public
+            // SDK; the old int form (OP_GET_USAGE_STATS, 43) is gone. The op
+            // name is understood from API 24, which is our minSdk.
+            appOps.unsafeCheckOpNoThrow(
+                AppOpsManager.OPSTR_GET_USAGE_STATS,
+                android.os.Process.myUid(),
+                ctx.packageName
+            ) == AppOpsManager.MODE_ALLOWED
+        }.getOrDefault(false)
+
+        if (byAppOps) return true
+
+        // Some ROMs under-report the op, so fall back to probing rather than
+        // telling a correctly configured user that they have not granted it.
         return runCatching {
-            val usm = Ctx.get().getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-            val now = System.currentTimeMillis()
-            val events = usm.queryEvents(now - 120_000L, now)
+            val usm = ctx.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+            val events = usm.queryEvents(System.currentTimeMillis() - 600_000L, System.currentTimeMillis())
             val event = UsageEvents.Event()
             var found = false
             while (!found && events.hasNextEvent()) {
                 events.getNextEvent(event)
-                if (event.packageName == Ctx.get().packageName) found = true
+                if (event.packageName == ctx.packageName) found = true
             }
             found
         }.getOrDefault(false)

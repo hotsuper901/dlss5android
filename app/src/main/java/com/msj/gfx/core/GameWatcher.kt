@@ -37,16 +37,23 @@ class GameWatcher(
     private val _foregroundPkg = MutableStateFlow<String?>(null)
     val foregroundPkg = _foregroundPkg
 
+    /** The full detection result, including unrecognised-but-game-shaped builds. */
+    private val _hit = MutableStateFlow<GameDetector.Hit?>(null)
+    val hit = _hit
+
     private val _launches = MutableStateFlow(0)
     val launches = _launches
 
     private var previous: GameCatalog.Game? = null
+    private var previousPkg: String? = null
 
     var onGameLaunched: ((GameCatalog.Game) -> Unit)? = null
     var onGameExited: ((GameCatalog.Game) -> Unit)? = null
 
     fun start() {
         if (job?.isActive == true) return
+        // Rehydrate so a restarted service does not show a blank HUD.
+        runCatching { GameDetector.restore() }
         job = scope.launch(Dispatchers.Default) {
             while (isActive) {
                 runCatching { tick() }
@@ -62,31 +69,45 @@ class GameWatcher(
                 previous?.let { onGameExited?.invoke(it) }
                 previous = null
             }
+            previousPkg = null
             _current.value = null
             _foregroundPkg.value = null
+            _hit.value = null
             return
         }
 
-        val pkg = MemoryTools.foregroundPackage()
-        _foregroundPkg.value = pkg
-        val game = GameCatalog.match(pkg)
+        val result = GameDetector.poll()
+        _hit.value = result
+        _foregroundPkg.value = result?.packageName
+        val game = result?.game
 
-        if (game?.packageName != previous?.packageName) {
+        // Transition on the package, not on the preset. An unrecognised but
+        // game-shaped build has game == null, and keying off the preset meant
+        // the launch counter never moved for exactly the builds that needed it.
+        val pkg = result?.packageName
+        if (pkg != null && pkg != previousPkg) {
             previous?.let { onGameExited?.invoke(it) }
-            if (game != null) {
-                _launches.value = _launches.value + 1
-                onGameLaunched?.invoke(game)
-            }
+            _launches.value = _launches.value + 1
+            game?.let { onGameLaunched?.invoke(it) }
         }
+        if (pkg == null) previous?.let { onGameExited?.invoke(it) }
 
+        previousPkg = pkg
         previous = game
         _current.value = game
-        _state.value = if (game != null) State.IN_GAME else State.IDLE
+        _state.value = if (result != null) State.IN_GAME else State.IDLE
+    }
+
+    companion object {
+        /** Last detection result from any live watcher, for the UI. */
+        fun lastHit(): GameDetector.Hit? = GameDetector.lastKnown()
     }
 
     fun stop() {
         job?.cancel()
         job = null
+        previousPkg = null
+        previous = null
         _current.value = null
         _state.value = State.UNKNOWN_NO_PERMISSION
     }

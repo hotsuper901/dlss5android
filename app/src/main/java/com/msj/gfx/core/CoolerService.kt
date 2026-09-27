@@ -99,7 +99,7 @@ class CoolerService : Service() {
         // Swiping the app away from recents should not stop the booster while
         // the user is still in a match.
         super.onTaskRemoved(rootIntent)
-        if (watcher.current.value != null) return
+        if (GameDetector.lastKnown() != null) return
         stopSelf()
     }
 
@@ -119,7 +119,9 @@ class CoolerService : Service() {
                     notify(buildNotification("Trimmed while throttling", r.note))
                 }
 
-                val detected = watcher.current.value?.label ?: "no game detected"
+                // Use the full hit, not just the preset: an unrecognised build
+                // has no preset but is still the game the user is playing.
+                val detected = GameDetector.lastKnown()?.label ?: "no game detected"
                 notify(buildNotification(
                     "Free ${s.freeRamMb} MB - $detected",
                     (s.batteryTempC ?: s.cpuTempC)?.let { "${it.toInt()}\u00b0C" } ?: "temp n/a"

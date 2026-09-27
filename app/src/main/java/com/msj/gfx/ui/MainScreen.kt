@@ -105,6 +105,7 @@ fun MsjRoot(
                     perf = perf, boosting = boosting, boosterOn = boosterOn,
                     autoTrim = autoTrim, preset = preset,
                     detected = vm.detected.collectAsState().value,
+                    hit = vm.hit.collectAsState().value,
                     watchState = vm.watchState.collectAsState().value,
                     usageGranted = usageGranted,
                     onRequestUsageAccess = onRequestUsageAccess,
@@ -134,6 +135,7 @@ private fun DashTab(
     perf: PerfSnapshot, boosting: Boolean, boosterOn: Boolean, autoTrim: Boolean,
     preset: Preset,
     detected: GameCatalog.Game?,
+    hit: com.msj.gfx.core.GameDetector.Hit?,
     watchState: com.msj.gfx.core.GameWatcher.State,
     usageGranted: Boolean,
     onRequestUsageAccess: () -> Unit,
@@ -152,8 +154,8 @@ private fun DashTab(
 
         Spacer(Modifier.height(16.dp))
         DetectionCard(
-            detected, watchState, usageGranted, perf.freeRamMb, perf.lowMemory,
-            onRequestUsageAccess, onResync
+            detected, hit, watchState, usageGranted, perf.freeRamMb, perf.lowMemory,
+            vm.diag.collectAsState().value, onRequestUsageAccess, onResync
         )
 
         Spacer(Modifier.height(16.dp))
@@ -238,10 +240,12 @@ private fun Header() {
 @Composable
 private fun DetectionCard(
     detected: GameCatalog.Game?,
+    hit: com.msj.gfx.core.GameDetector.Hit?,
     state: com.msj.gfx.core.GameWatcher.State,
     usageGranted: Boolean,
     freeRamMb: Int,
     lowMemory: Boolean,
+    diag: String,
     onRequestUsageAccess: () -> Unit,
     onResync: () -> Unit
 ) {
@@ -267,7 +271,7 @@ private fun DetectionCard(
                 fontSize = 11.sp, color = Muted, fontWeight = FontWeight.Bold,
                 letterSpacing = 1.sp, modifier = Modifier.weight(1f)
             )
-            if (detected != null) {
+            if (hit != null) {
                 Text(
                     "DETECTED",
                     fontSize = 9.sp, color = OkGreen, fontWeight = FontWeight.Black
@@ -303,6 +307,32 @@ private fun DetectionCard(
                 )
             }
 
+            // A game we recognised as a game but have no preset for. Shown
+            // rather than hidden, because the package name is the only way to
+            // add support for it properly.
+            hit != null && detected == null -> {
+                Text(
+                    hit.label,
+                    fontSize = 17.sp, fontWeight = FontWeight.Black, color = Ink
+                )
+                Text(
+                    hit.packageName,
+                    fontSize = 10.sp, color = NeonCyan, fontFamily = FontFamily.Monospace
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Game detected, but we have no tuned preset for this build yet. " +
+                        "The generic booster still applies.",
+                    fontSize = 12.sp, color = Body, lineHeight = 18.sp
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "$freeRamMb MB free right now.",
+                    fontSize = 12.sp, color = if (lowMemory) HotAmber else OkGreen,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
             detected != null -> {
                 Text(
                     detected.label,
@@ -329,13 +359,20 @@ private fun DetectionCard(
             }
 
             state == com.msj.gfx.core.GameWatcher.State.IDLE -> {
-                Text("No supported game on screen", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Ink)
-                Spacer(Modifier.height(4.dp))
+                Text("No game on screen", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Ink)
+                Spacer(Modifier.height(6.dp))
                 Text(
-                    "Start Free Fire or Mobile Legends, then pull this screen back to the " +
-                        "foreground. Detection only reports while our process is alive.",
-                    color = Body, fontSize = 12.sp, lineHeight = 18.sp
+                    diag,
+                    fontSize = 11.sp, color = WarnYellow, lineHeight = 17.sp
                 )
+                Spacer(Modifier.height(8.dp))
+                TextButton(onClick = onResync, modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        "RESCAN DETECTION",
+                        color = NeonCyan, fontSize = 11.sp, fontWeight = FontWeight.Black
+                    )
+                }
+                Spacer(Modifier.height(4.dp))
             }
 
             else -> {

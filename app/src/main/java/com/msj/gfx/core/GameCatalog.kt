@@ -145,7 +145,30 @@ object GameCatalog {
      *
      * Binder call. Must be called off the main thread.
      */
-    fun launchableApps(): List<Installed> = runCatching {
+    @Volatile private var launchableCache: List<Installed>? = null
+    @Volatile private var launchableCachedAt = 0L
+
+    /**
+     * queryIntentActivities is a binder call and the detector polls it often,
+     * so the result is cached for a few seconds and only invalidated by an
+     * explicit rescan.
+     */
+    fun launchableApps(maxAgeMs: Long = 15_000L): List<Installed> {
+        val c = launchableCache
+        val age = System.currentTimeMillis() - launchableCachedAt
+        if (c != null && age < maxAgeMs) return c
+        return queryLaunchable().also {
+            launchableCache = it
+            launchableCachedAt = System.currentTimeMillis()
+        }
+    }
+
+    fun invalidateLaunchableCache() {
+        launchableCache = null
+        launchableCachedAt = 0L
+    }
+
+    private fun queryLaunchable(): List<Installed> = runCatching {
         val pm = Ctx.get().packageManager
         val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
         val resolved = if (Build.VERSION.SDK_INT >= 33) {
@@ -182,18 +205,32 @@ object GameCatalog {
      * game, so an unknown build can be identified by reading its real package
      * name off the diagnostics screen instead of guessing at it.
      */
-    fun gameLikePackages(): List<Installed> {
-        val needles = listOf(
-            "garena", "freefire", "free.fire", "moonton", "mobilelegends", "mlbb",
-            "tencent", "pubg", "ig", "krmobile", "rekoo", "vng", "activision",
-            "callofduty", "criticalops", "supercell", "clash", "riot", "valorant",
-            "miHoYo", "genshin", "honorofkings", "sgame", "荒野", "free fire"
-        )
-        return launchableApps().filter { app ->
-            val hay = "${app.packageName} ${app.label}".lowercase()
-            needles.any { hay.contains(it.lowercase()) }
-        }
+    /**
+     * Fragments that identify a game regardless of the exact package string.
+     * Deliberately broad: the point is to recognise a build we have never seen
+     * before, not to be precise. A false positive costs one stray "game
+     * detected" line; a false negative is a detector that silently never works.
+     */
+    private val SHAPE = listOf(
+        "garena", "freefire", "free fire", "free_fire", "kgvn", "kid",
+        "moonton", "mobilelegends", "mobile legends", "mlbb",
+        "tencent", "pubg", "krmobile", "rekoo", "pubgm", "tmgp.sgame",
+        "activision", "callofduty", "call of duty", "criticalops",
+        "supercell", "clash", "riot", "valorant", "mihoyo", "genshin",
+        "honorofkings", "vng", "krafton", "ubisoft", "ea", "playrix"
+    )
+
+    fun looksLikeGame(packageName: String, label: String? = null): Boolean {
+        val hay = (packageName + " " + (label ?: "")).lowercase()
+        return SHAPE.any { hay.contains(it) }
     }
+
+    /** Real launcher label for a package, or the package itself if unknown. */
+    fun labelFor(pkg: String): String =
+        launchableApps().firstOrNull { it.packageName == pkg }?.label ?: pkg
+
+    fun gameLikePackages(): List<Installed> =
+        launchableApps().filter { looksLikeGame(it.packageName, it.label) }
 
     fun isInstalled(pkg: String): Boolean = runCatching {
         if (Build.VERSION.SDK_INT >= 33) {

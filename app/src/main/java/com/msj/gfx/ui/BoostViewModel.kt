@@ -39,6 +39,14 @@ class BoostViewModel : ViewModel() {
     private val _usageGranted = MutableStateFlow(false)
     val usageGranted = _usageGranted.asStateFlow()
 
+    /** Full detection result incl. unrecognised builds, for the dashboard. */
+    private val _hit = MutableStateFlow<GameDetector.Hit?>(null)
+    val hit = _hit.asStateFlow()
+
+    /** Plain-English reason detection is or is not working. */
+    private val _diag = MutableStateFlow("")
+    val diag = _diag.asStateFlow()
+
     private val _installed = MutableStateFlow<List<GameCatalog.Game>>(emptyList())
     val installed = _installed.asStateFlow()
 
@@ -81,6 +89,10 @@ class BoostViewModel : ViewModel() {
         _scanning.value = true
         viewModelScope.launch(Dispatchers.Default) {
             try {
+                // A rescan is also a request for fresh truth about what is
+                // installed, so the cached launcher list has to be dropped.
+                GameCatalog.invalidateLaunchableCache()
+                GameDetector.poll()
                 val all = GameCatalog.launchableApps()
                 _launchableCount.value = all.size
                 _installed.value = GameCatalog.installed()
@@ -90,6 +102,7 @@ class BoostViewModel : ViewModel() {
                 val known = _installed.value.map { it.packageName }.toSet()
                 _unmatched.value = GameCatalog.gameLikePackages()
                     .filterNot { it.packageName in known }
+                _diag.value = BoostDiagnostics.explain(GameDetector.lastKnown())
             } finally {
                 _scanning.value = false
             }
@@ -108,6 +121,8 @@ class BoostViewModel : ViewModel() {
         permJob?.cancel()
         permJob = viewModelScope.launch(Dispatchers.Default) {
             _usageGranted.value = MemoryTools.hasUsageAccess()
+        _hit.value = GameWatcher.lastHit()
+        _diag.value = BoostDiagnostics.explain(_hit.value)
             watcher?.start()
         }
     }
