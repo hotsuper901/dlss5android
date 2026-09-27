@@ -1,6 +1,5 @@
 package com.msj.gfx.ui
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
@@ -37,7 +36,6 @@ private val MsjScheme = darkColorScheme(
 
 @Composable
 fun MsjTheme(content: @Composable () -> Unit) {
-    // Deliberately dark-only. A light variant of a game HUD is never the right call.
-    @Suppress("UNUSED_EXPRESSION") isSystemInDarkTheme()
+    // Deliberately dark-only: a light variant of a game HUD is never the right call.
     MaterialTheme(colorScheme = MsjScheme, content = content)
 }

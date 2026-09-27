@@ -9,6 +9,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
 import com.msj.gfx.core.CoolerService
@@ -69,7 +70,9 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 )
-                if (boosterOn) CoolerService.start(this)
+                if (boosterOn) {
+                    LaunchedEffect(Unit) { CoolerService.start(this@MainActivity) }
+                }
             }
         }
     }

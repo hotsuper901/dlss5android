@@ -53,6 +53,10 @@ class GameOverlayService : android.app.Service() {
 
     @SuppressLint("InflateParams")
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
         if (!hasOverlayPermission()) { stopSelf(); return START_NOT_STICKY }
         if (root == null) buildOverlay()
         startForegroundCompat()
@@ -220,12 +224,15 @@ class GameOverlayService : android.app.Service() {
     companion object {
         private const val CH_ID = "msj_gfx_hud"
         private const val NOTIF_ID = 1002
+        const val ACTION_STOP = "com.msj.gfx.HUD_STOP"
 
         fun start(ctx: Context) = runCatching {
             ctx.startForegroundService(Intent(ctx, GameOverlayService::class.java))
         }
         fun stop(ctx: Context) = runCatching {
-            ctx.startService(Intent(ctx, GameOverlayService::class.java).setAction("stop"))
+            ctx.startService(
+                Intent(ctx, GameOverlayService::class.java).setAction(ACTION_STOP)
+            )
         }
     }
 }

@@ -50,17 +50,14 @@ object MemoryTools {
         (am.runningAppProcesses ?: emptyList()).mapNotNull { it.processName }
     }.getOrDefault(emptyList())
 
-    fun isGameForegrounded(): Boolean {
-        val fg = runCatching {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val am = Ctx.get().getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-                Ctx.get().getSystemService(Context.ACTIVITY_SERVICE)
-                am.runningAppProcesses?.firstOrNull { it.importance ==
-                    ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND }?.processName
-            } else null
-        }.getOrNull()
-        return fg != null && GameCatalog.match(fg) != null
-    }
+    fun isGameForegrounded(): Boolean = runCatching {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
+        val am = Ctx.get().getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val fg = am.runningAppProcesses?.firstOrNull {
+            it.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+        }?.processName
+        fg != null && GameCatalog.match(fg) != null
+    }.getOrDefault(false)
 
     fun isAnyGameRunning(): Boolean {
         val procs = runningPackages()

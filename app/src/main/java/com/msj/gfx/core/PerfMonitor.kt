@@ -128,7 +128,7 @@ object PerfMonitor {
     }.getOrDefault(lastBatteryTemp to false)
 
     /** Trims the marketing string down to something that fits in a tile. */
-    private fun socName(): String = run {
+    private fun socName(): String = runCatching {
         val raw = Build.SOC_MANUFACTURER.ifEmpty { Build.HARDWARE }
         raw.uppercase()
             .replace("SM", "S")
