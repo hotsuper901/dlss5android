@@ -21,18 +21,25 @@
     <!-- Package visibility for the supported titles, so detection and install
          checks work without QUERY_ALL_PACKAGES on API 30+. -->
     <queries>
+        <!-- Verified against live Play Store listings 2026-09. Free Fire is
+             com.dts.freefireth; com.garena.game.kgvn is Lien Quan Mobile. -->
+        <package android:name="com.dts.freefireth" />
+        <package android:name="com.dts.freefiremax" />
         <package android:name="com.garena.game.kgvn" />
         <package android:name="com.garena.game.kid" />
         <package android:name="com.tencent.ig" />
+        <package android:name="com.tencent.ig.lite" />
+        <package android:name="com.pubg.imobile" />
+        <package android:name="com.pubg.newstate" />
+        <package android:name="com.pubg.krmobile" />
         <package android:name="com.moonton.mobilelegends" />
         <package android:name="com.tencent.tmgp.sgame" />
         <package android:name="com.activision.callofduty.shooter" />
         <package android:name="ca.criticalops.thecriticalop" />
-        <package android:name="com.garena.game.kgvn.ow" />
 
-        <!-- Also query the launcher intent. A hardcoded package list is a
-             guess: repackaged and regional builds ship under names we cannot
-             enumerate in advance, and this makes them visible. -->
+        <!-- Also query the launcher intent, because a hardcoded package list is
+             a guess: repackaged and regional builds ship under names we cannot
+             enumerate in advance. -->
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />

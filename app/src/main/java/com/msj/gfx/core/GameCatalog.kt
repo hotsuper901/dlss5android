@@ -29,7 +29,7 @@ object GameCatalog {
         Game(pkg, label, accent, minRam, levers.toList())
 
     val FREE_FIRE = g(
-        "com.garena.game.kgvn", "Free Fire", 0xFFFF7A45, 1200,
+        "com.dts.freefireth", "Free Fire", 0xFFFF7A45, 1200,
         "Settings > Graphics > Smooth. Ultra caps at 30fps and costs you half the draw distance",
         "Camera > first-person scope set to 'Classic' to cut view-model overdraw",
         "Turn off Auto-shoot and the aim training popup so the frame budget goes to rendering",
@@ -37,7 +37,7 @@ object GameCatalog {
     )
 
     val FREE_FIRE_MAX = g(
-        "com.garena.game.kid", "Free Fire MAX", 0xFFFFB020, 1600,
+        "com.dts.freefiremax", "Free Fire MAX", 0xFFFFB020, 1600,
         "Graphics > Ultra, and set Anti-aliasing OFF - it costs 8-10fps on most Adreno and Mali",
         "Camera > 'Classic' scope",
         "Turn off bullet-helper visuals before a ranked match, they re-render every bullet",
@@ -80,19 +80,55 @@ object GameCatalog {
         "Lower the FOV slider a touch - it is a direct multiplier on fragment cost"
     )
 
+    val LIEN_QUAN = g(
+        "com.garena.game.kgvn", "Garena Lien Quan Mobile", 0xFF10B981, 1200,
+        "MOBA, so the frame budget goes to the lane you are pushing",
+        "Lower the draw distance and particle effects - these are the usual stutter sources",
+        "Close the background apps; a MOBA holds far less RAM than a battle royale"
+    )
+
+    val BGMI = g(
+        "com.pubg.imobile", "BGMI", 0xFFF97316, 1800,
+        "Graphics > Smooth. Ultra caps the frame rate on most devices anyway",
+        "Set the camera to 'Classic' to cut view-model overdraw",
+        "Turn off Gyroscope aim and auto-pickup if you do not use them"
+    )
+
+    val PUBG_LITE = g(
+        "com.tencent.ig.lite", "PUBG Mobile Lite", 0xFF84CC16, 700,
+        "This build already targets low-end devices, leave the defaults alone",
+        "Lower the resolution scale before you lower quality - it costs less visually"
+    )
+
+    val NEW_STATE = g(
+        "com.pubg.newstate", "New State Mobile", 0xFF0EA5E9, 1800,
+        "Smooth plus reduced draw distance is the combination that holds frame rate",
+        "Turn off motion blur in Settings > Graphics"
+    )
+
     val ALL: List<Game> = listOf(
-        FREE_FIRE, FREE_FIRE_MAX, PUBG_MOBILE, MLBB, HONOR_OF_KINGS, COD_MOBILE, CRITICAL_OPS
+        FREE_FIRE, FREE_FIRE_MAX, PUBG_MOBILE, PUBG_LITE, BGMI, NEW_STATE,
+        MLBB, HONOR_OF_KINGS, COD_MOBILE, CRITICAL_OPS, LIEN_QUAN
     )
 
     /** Regional and repackaged variants that report a different launcher package. */
     private val ALIASES: Map<String, Game> = buildMap {
         listOf(
-            "com.garena.game.kgvn" to FREE_FIRE,
+            // Verified 2026-09 against the live Play Store listing. Free Fire is
+            // com.dts.freefireth, NOT com.garena.game.kgvn - that Garena
+            // package now belongs to Garena Lien Quan Mobile in Vietnam, which
+            // is why detection silently failed for the actual game.
+            "com.dts.freefireth" to FREE_FIRE,
+            "com.dts.freefiremax" to FREE_FIRE_MAX,
+            // Legacy/regional Garena identifiers, kept so older installs match.
+            "com.garena.game.kgvn" to LIEN_QUAN,
             "com.garena.game.kid" to FREE_FIRE_MAX,
             "com.garena.game.IDungeon" to FREE_FIRE,
             "com.tencent.ig" to PUBG_MOBILE,
+            "com.tencent.ig.lite" to PUBG_LITE,
+            "com.pubg.imobile" to BGMI,
+            "com.pubg.newstate" to NEW_STATE,
             "com.pubg.krmobile" to PUBG_MOBILE,
-            "com.pubg.imobile" to PUBG_MOBILE,
             "com.vng.pubgmobile" to PUBG_MOBILE,
             "com.rekoo.pubgm" to PUBG_MOBILE,
             "com.tencent.tmgp.pubgmhd" to PUBG_MOBILE,
@@ -108,9 +144,17 @@ object GameCatalog {
 
     /** Prefix entries cover suffixed regional builds, e.g. com.moonton.mobilelegends.bh. */
     private val PREFIXES: List<Pair<String, Game>> = listOf(
-        "com.garena.game.kgvn" to FREE_FIRE,
+        "com.dts.freefireth" to FREE_FIRE,
+        "com.dts.freefiremax" to FREE_FIRE_MAX,
+        "com.dts" to FREE_FIRE,
+        "com.garena.game.kgvn" to LIEN_QUAN,
         "com.garena.game.kid" to FREE_FIRE_MAX,
-        "com.garena.game" to FREE_FIRE,
+        // Order matters: firstOrNull wins, so the specific packages have to
+        // come before the broad com.pubg catch-all or they all collapse into
+        // one title.
+        "com.tencent.ig.lite" to PUBG_LITE,
+        "com.pubg.imobile" to BGMI,
+        "com.pubg.newstate" to NEW_STATE,
         "com.tencent.ig" to PUBG_MOBILE,
         "com.pubg" to PUBG_MOBILE,
         "com.vng.pubgmobile" to PUBG_MOBILE,
@@ -212,8 +256,11 @@ object GameCatalog {
      * detected" line; a false negative is a detector that silently never works.
      */
     private val SHAPE = listOf(
+        // "dts" is the real Free Fire namespace (com.dts.freefireth) and was
+        // missing here, which is the second reason detection missed it.
         "garena", "freefire", "free fire", "free_fire", "kgvn", "kid",
-        "moonton", "mobilelegends", "mobile legends", "mlbb",
+        "com.dts", "dts.freefire",
+        "moonton", "mobilelegends", "mobile legends", "mlbb", "mobile.legends",
         "tencent", "pubg", "krmobile", "rekoo", "pubgm", "tmgp.sgame",
         "activision", "callofduty", "call of duty", "criticalops",
         "supercell", "clash", "riot", "valorant", "mihoyo", "genshin",
