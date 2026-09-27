@@ -60,6 +60,18 @@ class ColorOverlayService : android.app.Service() {
     private var overlay: View? = null
     private var wm: WindowManager? = null
 
+    /**
+     * What the overlay is currently being asked to show.
+     *
+     * The service keeps these itself rather than reading SettingsStore on every
+     * apply, because the values that reach here are panel-adapted and are NOT
+     * the user's authored setting. Re-reading the store meant a rebuild (a
+     * rotation, say) could pick up a stale or hand-edited value instead of what
+     * is actually on screen.
+     */
+    private var lastDepth = 0
+    private var lastWarmth = 0
+
     // The view is created once and re-parented on rebuild, so a rotation does
     // not churn a fresh View through the service.
 
@@ -75,7 +87,9 @@ class ColorOverlayService : android.app.Service() {
         }
         ensureChannel()
         startForegroundCompat()
-        apply(SettingsStore.get().tintDepth.value, SettingsStore.get().tintWarmth.value)
+        lastDepth = SettingsStore.get().tintDepth.value
+        lastWarmth = SettingsStore.get().tintWarmth.value
+        apply(lastDepth, lastWarmth)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -83,28 +97,44 @@ class ColorOverlayService : android.app.Service() {
             // Hot path: the service is already foreground and the window is
             // already attached, so update the colour and return without
             // touching the notification.
-            val d = intent.getIntExtra(EXTRA_DEPTH, -1)
-            val w = intent.getIntExtra(EXTRA_WARMTH, Int.MIN_VALUE)
-            if (d != -1) SettingsStore.get().setTintDepth(d)
-            if (w != Int.MIN_VALUE) SettingsStore.get().setTintWarmth(w)
             if (hasOverlayPermission()) {
-                apply(SettingsStore.get().tintDepth.value, SettingsStore.get().tintWarmth.value)
+                applyFromIntent(intent)
                 return START_STICKY
             }
         }
-        when (intent?.action) {
-            ACTION_STOP -> { stopSelf(); return START_NOT_STICKY }
-            ACTION_UPDATE -> {
-                val depth = intent.getIntExtra(EXTRA_DEPTH, -1)
-                val warmth = intent.getIntExtra(EXTRA_WARMTH, Int.MIN_VALUE)
-                if (depth != -1) SettingsStore.get().setTintDepth(depth)
-                if (warmth != Int.MIN_VALUE) SettingsStore.get().setTintWarmth(warmth)
-            }
-        }
+        if (intent?.action == ACTION_STOP) { stopSelf(); return START_NOT_STICKY }
         if (!hasOverlayPermission()) { stopSelf(); return START_NOT_STICKY }
-        apply(SettingsStore.get().tintDepth.value, SettingsStore.get().tintWarmth.value)
+        applyFromIntent(intent)
         startForegroundCompat()
         return START_STICKY
+    }
+
+    /**
+     * Take depth/warmth from the intent, remembering them for later rebuilds.
+     *
+     * This deliberately does NOT write them back to SettingsStore. The values
+     * arriving here are the panel-adapted ones, and persisting them was a
+     * feedback loop:
+     *
+     *   select a look -> store gets the authored depth
+     *   watcher adapts it for the panel -> service receives the scaled depth
+     *   service writes the scaled depth back -> the UI slider, bound to the
+     *   store, jumps to a number the user never set
+     *
+     * Switching presets quickly then flip-flopped the store between authored
+     * and adapted values, so the depth landed on whichever write arrived last
+     * and read as random. It also destroyed the authored value, so any later
+     * hand-tweak of the slider started from the scaled number instead of the
+     * preset's own.
+     *
+     * The store is the user's setting and only the UI writes to it.
+     */
+    private fun applyFromIntent(intent: Intent?) {
+        val d = intent?.getIntExtra(EXTRA_DEPTH, -1) ?: -1
+        val w = intent?.getIntExtra(EXTRA_WARMTH, Int.MIN_VALUE) ?: Int.MIN_VALUE
+        if (d != -1) lastDepth = d.coerceIn(0, 40)
+        if (w != Int.MIN_VALUE) lastWarmth = w.coerceIn(-60, 60)
+        apply(lastDepth, lastWarmth)
     }
 
     override fun onDestroy() {
@@ -112,6 +142,8 @@ class ColorOverlayService : android.app.Service() {
         overlay = null
         currentTag = null
         foregroundStarted = false
+        lastDepth = 0
+        lastWarmth = 0
         super.onDestroy()
     }
 
@@ -243,7 +275,7 @@ class ColorOverlayService : android.app.Service() {
                 runCatching { wm?.removeView(v) }
                 overlay = null
                 currentTag = null
-                apply(SettingsStore.get().tintDepth.value, SettingsStore.get().tintWarmth.value)
+                apply(lastDepth, lastWarmth)
             }
     }
 

@@ -1,3 +1,4 @@
+import java.io.File
 import com.msj.gfx.core.DisplayController
 import com.msj.gfx.core.OverlayWindowPolicy
 import com.msj.gfx.core.DisplayProfile
@@ -88,6 +89,45 @@ fun main() {
     check("assumed profile is OLED", DisplayProfile.ASSUMED.isOled)
     check("assumed profile does not scale depth", DisplayProfile.ASSUMED.depthScale == 1.0f)
     check("lcd scales depth", lcd().depthScale < 1.0f)
+
+    // Regression: "depth goes random when I switch presets repeatedly".
+    //
+    // The overlay service wrote the panel-ADAPTED depth back into SettingsStore
+    // on every update. The store is what the UI's depth slider is bound to, so
+    // selecting a preset pushed the authored depth in, the watcher scaled it,
+    // and the service pushed the scaled number back out - making the slider
+    // jump to a value the user never set. Switching quickly flip-flopped the
+    // store between the two, so the depth settled on whichever write landed
+    // last and read as random. It also destroyed the authored value.
+    //
+    // The store is the user's setting; only the UI may write it. This scans the
+    // service source so the write cannot quietly come back.
+    run {
+        val src = File(
+            "app/src/main/java/com/msj/gfx/core/ColorOverlayService.kt"
+        )
+        if (src.exists()) {
+            val text = src.readText()
+            // Strip comments so the KDoc explaining the bug does not trip it.
+            val code = text
+                .replace(Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL), "")
+                .replace(Regex("//.*"), "")
+            check(
+                "overlay service does not write tint to the store",
+                !code.contains("setTintDepth") && !code.contains("setTintWarmth")
+            )
+        } else {
+            println("  skip  store-write scan (run from the repo root)")
+        }
+
+        // The service must remember what it was asked for, so a rebuild after a
+        // rotation shows what is on screen rather than a stale stored value.
+        check(
+            "service tracks its own last depth/warmth",
+            File("app/src/main/java/com/msj/gfx/core/ColorOverlayService.kt")
+                .let { it.exists() && it.readText().contains("private var lastDepth") }
+        )
+    }
 
     // Regression: "attach a game, select a preset, the depth flashes".
     //

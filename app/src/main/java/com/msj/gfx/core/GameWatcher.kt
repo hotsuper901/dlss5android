@@ -29,6 +29,17 @@ class GameWatcher(
     private var lookJob: Job? = null
     private var boostJob: Job? = null
 
+    /**
+     * The in-flight [applyLook], cancelled before a new one starts.
+     *
+     * applyLook used to launch a fresh coroutine per change and never cancel the
+     * previous one. Tapping through presets quickly queued several applies that
+     * raced each other, and whichever reached the overlay last won - so the
+     * depth settled on an arbitrary preset's value. Cancelling first makes the
+     * newest selection authoritative.
+     */
+    private var applyJob: Job? = null
+
     enum class State { UNKNOWN_NO_PERMISSION, IDLE, IN_GAME }
 
     private val _state = MutableStateFlow(State.UNKNOWN_NO_PERMISSION)
@@ -188,7 +199,8 @@ class GameWatcher(
         // different look must replace the running one cleanly.
         if (appliedLook?.key == look.key) return
 
-        scope.launch {
+        applyJob?.cancel()
+        applyJob = scope.launch {
             // Switching to Off has to actively clear, not just do nothing.
             // The old early-return meant picking Off while a tint was running
             // left that tint up until the user left the game.
@@ -302,6 +314,8 @@ class GameWatcher(
         releaseEnhancePolicy()
         job?.cancel()
         job = null
+        applyJob?.cancel()
+        applyJob = null
         lookJob?.cancel()
         lookJob = null
         boostJob?.cancel()
