@@ -137,12 +137,13 @@ object MemoryTools {
                 val pkg = event.packageName ?: continue
                 // MOVE_TO_FOREGROUND is the signal we want; a foreground service
                 // of our own would otherwise win the race.
-                if (event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND ||
-                    event.eventType == UsageEvents.Event.ACTIVITY_RESUMED
-                ) {
-                    if (pkg == Ctx.get().packageName) continue
+                val isForeground = event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND ||
+                    event.eventType == UsageEvents.Event.ACTIVITY_RESUMED ||
+                    event.eventType == UsageEvents.Event.WINDOW_IN_FOCUS
+                if (isForeground && pkg != Ctx.get().packageName) {
                     val ts = event.timeStamp
-                    if (best == null || ts > best!!.second) best = pkg to ts
+                    val prev = best
+                    if (prev == null || ts > prev.second) best = pkg to ts
                 }
             }
             best?.first

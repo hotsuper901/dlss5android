@@ -53,7 +53,6 @@ object PerfMonitor {
         val throttling = temp != null && temp >= 42f
 
         val freeDevice = MemoryTools.freeRamMb()
-        val totalDevice = MemoryTools.totalRamMb()
 
         PerfSnapshot(
             cpuLoad = load,

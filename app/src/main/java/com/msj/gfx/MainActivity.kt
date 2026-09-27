@@ -109,16 +109,16 @@ class MainActivity : ComponentActivity() {
 
     private fun requestOverlay() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        // No result contract on purpose: ACTION_MANAGE_OVERLAY_PERMISSION does
+        // not report back a usable result, so onResume re-reads canDrawOverlays
+        // instead of trusting a callback that may lie.
         runCatching {
-            startActivityForResult(
+            startActivity(
                 Intent(
                     Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                     Uri.parse("package:$packageName")
-                ),
-                overlayPermissionRequestCode
+                )
             )
         }
     }
-
-    private companion object { const val overlayPermissionRequestCode = 4401 }
 }
