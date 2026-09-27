@@ -138,9 +138,11 @@ jobs:
 
       - name: Generate a signing keystore
         # The release build type falls back to the debug signing config when no
-        # MSJ_STORE_FILE is supplied, and that fallback was producing an
-        # *unsigned* APK rather than a debug-signed one - CI caught it via
-        # scripts/verify-apk-signature.py. So sign it properly and explicitly.
+        # MSJ_STORE_FILE is supplied, and that fallback does produce a signed
+        # APK - it was verified, carrying "CN=Android Debug". This step exists
+        # so the published APK is signed with a real key instead of the debug
+        # certificate, and so scripts/verify-apk-signature.py has a fixed
+        # certificate to check against on every run.
         #
         # This keystore is generated per run. That means each build is signed by
         # a different key, so a new APK will not install over an old one
