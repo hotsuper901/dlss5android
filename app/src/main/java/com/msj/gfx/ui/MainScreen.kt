@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.Radar
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Thermostat
 import androidx.compose.material.icons.filled.Tune
@@ -51,7 +52,9 @@ private enum class Tab(val label: String, val icon: ImageVector) {
 @Composable
 fun MsjRoot(
     overlayGranted: Boolean,
+    usageGranted: Boolean,
     onRequestOverlay: () -> Unit,
+    onRequestUsageAccess: () -> Unit,
     onToggleBooster: (Boolean) -> Unit,
     onToggleOverlay: (Boolean) -> Unit,
     onOpenGame: (String) -> Unit
@@ -101,7 +104,12 @@ fun MsjRoot(
                 Tab.DASH -> DashTab(
                     perf = perf, boosting = boosting, boosterOn = boosterOn,
                     autoTrim = autoTrim, preset = preset,
+                    detected = vm.detected.collectAsState().value,
+                    watchState = vm.watchState.collectAsState().value,
+                    usageGranted = usageGranted,
+                    onRequestUsageAccess = onRequestUsageAccess,
                     onBoost = vm::boost,
+                    onResync = vm::resyncDetection,
                     onToggleBooster = onToggleBooster,
                     onPreset = settings::setPreset,
                     onToggleAutoTrim = settings::setAutoTrim
@@ -124,7 +132,13 @@ fun MsjRoot(
 @Composable
 private fun DashTab(
     perf: PerfSnapshot, boosting: Boolean, boosterOn: Boolean, autoTrim: Boolean,
-    preset: Preset, onBoost: () -> Unit, onToggleBooster: (Boolean) -> Unit,
+    preset: Preset,
+    detected: GameCatalog.Game?,
+    watchState: com.msj.gfx.core.GameWatcher.State,
+    usageGranted: Boolean,
+    onRequestUsageAccess: () -> Unit,
+    onBoost: () -> Unit, onResync: () -> Unit,
+    onToggleBooster: (Boolean) -> Unit,
     onPreset: (Preset) -> Unit, onToggleAutoTrim: (Boolean) -> Unit
 ) {
     Column(
@@ -136,8 +150,11 @@ private fun DashTab(
         Spacer(Modifier.height(14.dp))
         Header()
 
-        Spacer(Modifier.height(18.dp))
-        RamBar(perf.ramUsedMb, perf.ramTotalMb)
+        Spacer(Modifier.height(16.dp))
+        DetectionCard(detected, watchState, usageGranted, onRequestUsageAccess, onResync)
+
+        Spacer(Modifier.height(16.dp))
+        DeviceRamBar(perf.freeRamMb, perf.deviceRamPct, perf.lowMemory)
 
         Spacer(Modifier.height(12.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -148,7 +165,11 @@ private fun DashTab(
                 t?.let { "${it.roundToInt()}°" } ?: "--", Modifier.weight(1f),
                 alert = t != null && t >= 42f
             )
-            StatTile(Icons.Filled.Memory, "SOC", perf.soc.take(6), Modifier.weight(1f))
+            StatTile(
+                Icons.Filled.Memory, "FREE",
+                "${perf.freeRamMb}M", Modifier.weight(1f),
+                alert = perf.lowMemory
+            )
         }
 
         if (perf.throttling) {
@@ -169,7 +190,7 @@ private fun DashTab(
             PresetRow(
                 p, p.key == preset.key,
                 onClick = { onPreset(p) },
-                quality = MemoryTools.recommendQuality(perf.cpuLoad, perf.ramPct, perf.batteryTempC ?: perf.cpuTempC)
+                quality = MemoryTools.recommendQuality(perf.cpuLoad, perf.deviceRamPct, perf.batteryTempC ?: perf.cpuTempC)
             )
         }
 
@@ -207,21 +228,141 @@ private fun Header() {
     }
 }
 
+
 @Composable
-private fun RamBar(used: Int, total: Int) {
-    val pct = if (total > 0) used.toFloat() / total else 0f
-    val bar by animateFloatAsState(pct.coerceIn(0f, 1f), tween(500, easing = FastOutSlowInEasing), label = "ram")
+private fun DetectionCard(
+    detected: GameCatalog.Game?,
+    state: com.msj.gfx.core.GameWatcher.State,
+    usageGranted: Boolean,
+    onRequestUsageAccess: () -> Unit,
+    onResync: () -> Unit
+) {
+    val accent = detected?.let { Color(it.accent) } ?: Muted
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(Panel)
+            .border(1.dp, accent.copy(alpha = 0.45f), RoundedCornerShape(18.dp))
+            .padding(16.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Filled.Radar,
+                null,
+                tint = if (detected != null) accent else WarnYellow,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "GAME DETECTION",
+                fontSize = 11.sp, color = Muted, fontWeight = FontWeight.Bold,
+                letterSpacing = 1.sp, modifier = Modifier.weight(1f)
+            )
+            if (detected != null) {
+                Text(
+                    "DETECTED",
+                    fontSize = 9.sp, color = OkGreen, fontWeight = FontWeight.Black
+                )
+            }
+        }
+
+        Spacer(Modifier.height(10.dp))
+
+        when {
+            !usageGranted -> {
+                Text(
+                    "Android 5.1 and newer stop apps from seeing which other apps are " +
+                        "running. Without Usage access there is no way to detect your game, " +
+                        "so we will not pretend otherwise.",
+                    color = Body, fontSize = 12.sp, lineHeight = 18.sp
+                )
+                Spacer(Modifier.height(10.dp))
+                Button(
+                    onClick = onRequestUsageAccess,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(
+                        "GRANT USAGE ACCESS",
+                        fontSize = 12.sp, fontWeight = FontWeight.Black
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Then tap Rescan - Settings does not report back to us.",
+                    fontSize = 10.sp, color = Muted
+                )
+            }
+
+            detected != null -> {
+                Text(
+                    detected.label,
+                    fontSize = 17.sp, fontWeight = FontWeight.Black, color = Ink
+                )
+                Text(detected.packageName, fontSize = 10.sp, color = Muted)
+                val free = MemoryTools.freeRamMb()
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    if (free >= detected.minFreeRamMb)
+                        "Healthy - $free MB free, this title wants ~${detected.minFreeRamMb} MB"
+                    else
+                        "Under-provisioned - $free MB free, this title wants ~${detected.minFreeRamMb} MB",
+                    fontSize = 12.sp,
+                    color = if (free >= detected.minFreeRamMb) OkGreen else HotAmber,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            state == com.msj.gfx.core.GameWatcher.State.IDLE -> {
+                Text("No supported game on screen", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Ink)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Start Free Fire or Mobile Legends, then pull this screen back to the " +
+                        "foreground. Detection only reports while our process is alive.",
+                    color = Body, fontSize = 12.sp, lineHeight = 18.sp
+                )
+            }
+
+            else -> {
+                Text("Waiting for a foreground app", fontSize = 13.sp, color = Body)
+            }
+        }
+
+        if (usageGranted) {
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = onResync) {
+                    Text("RESCAN", color = NeonCyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
+                }
+                Spacer(Modifier.weight(1f))
+                Text("polling every 1.2s", fontSize = 9.sp, color = Muted)
+            }
+        }
+    }
+}
+
+@Composable
+private fun DeviceRamBar(freeMb: Int, usedPct: Int, low: Boolean) {
     val c by animateColorAsState(
         when {
-            pct > 0.88f -> HotAmber
-            pct > 0.72f -> WarnYellow
+            low -> HotAmber
+            usedPct >= 88 -> WarnYellow
             else -> OkGreen
-        }, label = "ramc"
+        }, label = "devram"
     )
     Column(Modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
-            Text("MEMORY", fontSize = 11.sp, color = Muted, fontWeight = FontWeight.Bold)
-            Text("$used / $total MB", fontSize = 11.sp, color = Muted)
+            Text(
+                "DEVICE MEMORY",
+                fontSize = 11.sp, color = Muted, fontWeight = FontWeight.Bold
+            )
+            Text(
+                "$freeMb MB free",
+                fontSize = 11.sp,
+                color = c,
+                fontWeight = FontWeight.Bold
+            )
         }
         Spacer(Modifier.height(6.dp))
         Box(
@@ -233,7 +374,7 @@ private fun RamBar(used: Int, total: Int) {
         ) {
             Box(
                 Modifier
-                    .fillMaxWidth(bar)
+                    .fillMaxWidth((usedPct / 100f).coerceIn(0f, 1f))
                     .height(12.dp)
                     .clip(RoundedCornerShape(6.dp))
                     .background(c)
@@ -241,8 +382,10 @@ private fun RamBar(used: Int, total: Int) {
         }
         Spacer(Modifier.height(4.dp))
         Text(
-            "${MemoryTools.freeRamMb()} MB free for the game",
-            fontSize = 10.sp, color = Muted
+            if (low) "Android is reporting low memory - close apps before you queue"
+            else "$usedPct% in use across all apps",
+            fontSize = 10.sp,
+            color = if (low) HotAmber else Muted
         )
     }
 }

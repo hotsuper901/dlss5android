@@ -47,19 +47,22 @@ class CoolerService : Service() {
         promote()
 
         watcher.onGameLaunched = { game ->
-            if (settings.autoTrim.value) {
-                scope.launch {
-                    // Let the game finish its own loading before touching memory.
-                    delay(3500)
-                    MemoryTools.trim()
-                }
-            }
             notify(
                 buildNotification(
                     "Booster armed for ${game.label}",
-                    "Free RAM ${MemoryTools.freeRamMb()} MB"
+                    "Free RAM ${MemoryTools.freeRamMb()} MB of ${MemoryTools.totalRamMb()} MB"
                 )
             )
+            if (settings.autoTrim.value) {
+                scope.launch {
+                    // Let the game finish its own loading before touching memory.
+                    delay(4000)
+                    // This is a heap trim of our own process, not of theirs -
+                    // we cannot touch the game's memory and do not pretend to.
+                    val r = MemoryTools.trim()
+                    notify(buildNotification("Pre-match trim for ${game.label}", r.note))
+                }
+            }
         }
         watcher.onGameExited = { game ->
             notify(buildNotification("${game.label} closed", "Standing by"))
@@ -112,18 +115,14 @@ class CoolerService : Service() {
                 // stuttering at Ultra.
                 if (heatTicks == 3 && settings.autoTrim.value) {
                     MemoryTools.cooldown(400)
-                    MemoryTools.trim()
-                    notify(
-                        buildNotification(
-                            "Device is throttling",
-                            "Drop in-game graphics to Smooth"
-                        )
-                    )
+                    val r = MemoryTools.trim()
+                    notify(buildNotification("Trimmed while throttling", r.note))
                 }
 
+                val detected = watcher.current.value?.label ?: "no game detected"
                 notify(buildNotification(
-                    "CPU ${s.cpuLoad}% - RAM ${s.ramUsedMb}/${s.ramTotalMb} MB",
-                    (s.batteryTempC ?: s.cpuTempC)?.let { "${it.toInt()}°C" } ?: "temp n/a"
+                    "CPU ${s.cpuLoad}% - free ${s.freeRamMb} MB - $detected",
+                    (s.batteryTempC ?: s.cpuTempC)?.let { "${it.toInt()}\u00b0C" } ?: "temp n/a"
                 ))
             }
             delay(4000)

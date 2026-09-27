@@ -12,9 +12,12 @@ data class PerfSnapshot(
     val cpuLoad: Int = 0,             // 0..100 across all cores
     val cpuTempC: Float? = null,      // thermal_zone cpu average, null if hidden
     val batteryTempC: Float? = null,  // BatteryManager, most reliable on modern devices
-    val ramUsedMb: Int = 0,
+    val ramUsedMb: Int = 0,          // our own Java heap
     val ramTotalMb: Int = 0,
     val ramPct: Int = 0,
+    val freeRamMb: Int = 0,          // device-wide available - the number games care about
+    val deviceRamPct: Int = 0,       // device-wide usage
+    val lowMemory: Boolean = false,
     val fps: Int = 0,                 // only meaningful while a game is foregrounded
     val frameMs: Float = 0f,          // rolling frametime average
     val charging: Boolean = false,
@@ -49,6 +52,9 @@ object PerfMonitor {
         val temp = battTemp ?: zoned
         val throttling = temp != null && temp >= 42f
 
+        val freeDevice = MemoryTools.freeRamMb()
+        val totalDevice = MemoryTools.totalRamMb()
+
         PerfSnapshot(
             cpuLoad = load,
             cpuTempC = zoned,
@@ -56,6 +62,9 @@ object PerfMonitor {
             ramUsedMb = used.toInt(),
             ramTotalMb = total.toInt(),
             ramPct = pct,
+            freeRamMb = freeDevice,
+            deviceRamPct = MemoryTools.ramPressurePct(),
+            lowMemory = MemoryTools.isLowMemory(),
             charging = charging,
             throttling = throttling,
             soc = socName()
@@ -167,6 +176,9 @@ object PerfMonitor {
             ramUsedMb = used.toInt(),
             ramTotalMb = total.toInt(),
             ramPct = if (total > 0) ((used * 100) / total).toInt() else 0,
+            freeRamMb = MemoryTools.freeRamMb(),
+            deviceRamPct = MemoryTools.ramPressurePct(),
+            lowMemory = MemoryTools.isLowMemory(),
             charging = batt.second,
             throttling = (temp ?: 0f) >= 42f,
             soc = socName()

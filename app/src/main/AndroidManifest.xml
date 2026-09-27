@@ -8,11 +8,27 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Special access, granted by the user in Settings. Without it Android
+         5.1+ gives a normal app zero visibility into other running apps. -->
+    <uses-permission
+        android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
 
-    <!-- Used only to detect whether a supported game is installed, never to launch it silently. -->
     <uses-permission
         android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
+
+    <!-- Package visibility for the supported titles, so detection and install
+         checks work without QUERY_ALL_PACKAGES on API 30+. -->
+    <queries>
+        <package android:name="com.garena.game.kgvn" />
+        <package android:name="com.garena.game.kid" />
+        <package android:name="com.tencent.ig" />
+        <package android:name="com.moonton.mobilelegends" />
+        <package android:name="com.tencent.tmgp.sgame" />
+        <package android:name="com.activision.callofduty.shooter" />
+        <package android:name="ca.criticalops.thecriticalop" />
+    </queries>
 
     <application
         android:name=".GfxApp"
