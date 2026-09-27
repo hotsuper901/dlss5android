@@ -68,6 +68,34 @@ class SettingsStore(context: Context) {
     private val _tintWarmth = MutableStateFlow(prefs.getInt(K_TINT_WARMTH, 0))
     val tintWarmth = _tintWarmth
 
+    /** Which look auto-applies when a tracked game hits the foreground. */
+    private val _look = MutableStateFlow(
+        LookPresets.byKey(prefs.getString(K_LOOK, "off"))
+    )
+    val look = _look
+
+    /** Looks the user imported, restored from prefs on launch. */
+    private val _importedLooks = MutableStateFlow(readImportedLooks())
+    val importedLooks = _importedLooks
+
+    fun setLook(l: LookPreset) = prefs.edit().putString(K_LOOK, l.key).apply().also {
+        _look.value = l
+    }
+
+    fun setImportedLooks(list: List<LookPreset>) {
+        val json = org.json.JSONArray().apply { list.forEach { put(it.toJson()) } }.toString()
+        prefs.edit().putString(K_LOOKS_CUSTOM, json).apply()
+        _importedLooks.value = list
+    }
+
+    private fun readImportedLooks(): List<LookPreset> = runCatching {
+        val raw = prefs.getString(K_LOOKS_CUSTOM, null) ?: return emptyList()
+        val arr = org.json.JSONArray(raw)
+        (0 until arr.length()).mapNotNull { i ->
+            arr.optJSONObject(i)?.let { LookPreset.fromJson(it) }
+        }
+    }.getOrDefault(emptyList())
+
     private val _firstRun = MutableStateFlow(prefs.getInt(K_RUNS, 0) == 0)
     val firstRun = _firstRun
 
@@ -123,6 +151,8 @@ class SettingsStore(context: Context) {
         private const val K_AGGRESSIVE_TRIM = "aggressive_trim"
         private const val K_TINT_DEPTH = "tint_depth"
         private const val K_TINT_WARMTH = "tint_warmth"
+        private const val K_LOOK = "look_key"
+        private const val K_LOOKS_CUSTOM = "looks_custom"
         @Volatile private var instance: SettingsStore? = null
 
         fun get(): SettingsStore = instance ?: synchronized(this) {

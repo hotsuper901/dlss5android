@@ -119,14 +119,67 @@ class GameWatcher(
         if (store.aggressiveTrim.value) {
             runCatching { MemoryTools.trim() }
         }
+        applyLook()
+    }
+
+    /**
+     * The "it just works on launch" path.
+     *
+     * Runs on the watcher's background scope the moment a tracked game reaches
+     * the foreground: pushes the selected look's tint over the game, asks the
+     * display for its refresh target, and requests the OEM vivid profile where
+     * the OEM has one. Everything is best-effort and wrapped, because on a
+     * device without the overlay grant or without WRITE_SETTINGS a failure here
+     * must never take the watcher down or stop it watching.
+     */
+    private fun applyLook() {
+        val store = SettingsStore.get()
+        val look = store.look.value
+        if (look.key == "off") return
+
+        scope.launch {
+            // Overlay tint: depth + warmth over the game's own frame.
+            if (look.needsOverlay) {
+                runCatching {
+                    val ctx = Ctx.get()
+                    if (android.provider.Settings.canDrawOverlays(ctx)) {
+                        ColorOverlayService.start(ctx, look.depth, look.warmth)
+                    }
+                }
+            }
+            // Refresh target, if this look asks for one and the panel supports it.
+            if (look.refreshHz > 0) {
+                runCatching {
+                    val max = DisplayController.maxRefreshHz()
+                    if (max != null && look.refreshHz <= max) {
+                        DisplayController.setPeakRefresh(look.refreshHz.toFloat())
+                    }
+                }
+            }
+            // OEM colour profile: hardware, downstream of the game, so this is
+            // a genuine colour re-map rather than a tint.
+            if (look.oemVivid) {
+                runCatching { DisplayController.setOemVividMode(true) }
+            }
+        }
     }
 
     /** Hand the display back and stop trimming, so we do not drain a battery. */
     private fun releaseEnhancePolicy() {
         if (!applied) return
         applied = false
-        if (SettingsStore.get().forceRefresh.value) {
+        val store = SettingsStore.get()
+        if (store.forceRefresh.value) {
             runCatching { DisplayController.releasePeakRefresh() }
+        }
+        // Put the screen back the way we found it. Leaving a tint over whatever
+        // app the user opens next is the kind of thing that gets an app removed.
+        val look = store.look.value
+        if (look.needsOverlay) {
+            runCatching { ColorOverlayService.stop(Ctx.get()) }
+        }
+        if (look.oemVivid) {
+            runCatching { DisplayController.setOemVividMode(false) }
         }
     }
 

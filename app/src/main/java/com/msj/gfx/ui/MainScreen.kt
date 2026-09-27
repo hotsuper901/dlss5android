@@ -45,6 +45,8 @@ import android.graphics.BitmapFactory
 import com.msj.gfx.core.ColorOverlayService
 import com.msj.gfx.core.DisplayController
 import com.msj.gfx.core.ImageEnhancer
+import com.msj.gfx.core.LookPreset
+import com.msj.gfx.core.LookPresets
 import com.msj.gfx.core.GameCatalog
 import com.msj.gfx.core.GraphicsEnhancer
 import com.msj.gfx.core.MemoryTools
@@ -87,6 +89,8 @@ fun MsjRoot(
     val aggressiveTrim by settings.aggressiveTrim.collectAsState()
     val tintDepth by settings.tintDepth.collectAsState()
     val tintWarmth by settings.tintWarmth.collectAsState()
+    val look by settings.look.collectAsState()
+    val importedLooks by settings.importedLooks.collectAsState()
     val vm = remember { BoostViewModel() }
     val perf by vm.perf.collectAsState()
     val boosting by vm.boosting.collectAsState()
@@ -152,7 +156,15 @@ fun MsjRoot(
                     depth = tintDepth,
                     warmth = tintWarmth,
                     onDepth = settings::setTintDepth,
-                    onWarmth = settings::setTintWarmth
+                    onWarmth = settings::setTintWarmth,
+                    look = look,
+                    imported = importedLooks,
+                    onLook = settings::setLook,
+                    onDepthForLook = { d, w ->
+                        settings.setTintDepth(d)
+                        settings.setTintWarmth(w)
+                    },
+                    onImported = settings::setImportedLooks
                 )
                 Tab.HUD -> HudTab(
                     overlayOn = overlayOn, overlayGranted = overlayGranted,
@@ -885,7 +897,12 @@ private fun EnhanceTab(
     depth: Int,
     warmth: Int,
     onDepth: (Int) -> Unit,
-    onWarmth: (Int) -> Unit
+    onWarmth: (Int) -> Unit,
+    look: LookPreset,
+    imported: List<LookPreset>,
+    onLook: (LookPreset) -> Unit,
+    onDepthForLook: (Int, Int) -> Unit,
+    onImported: (List<LookPreset>) -> Unit
 ) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -944,6 +961,82 @@ private fun EnhanceTab(
         Text(
             "Live colour layer over other apps, plus an offline sharpen pipeline",
             fontSize = 12.sp, color = Muted, lineHeight = 17.sp
+        )
+        Spacer(Modifier.height(18.dp))
+
+        // ---- looks: the one-tap version of everything below ----
+        SectionLabel("LOOKS - AUTO-APPLY ON GAME LAUNCH")
+        val looks = LookPresets.all(imported)
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            looks.forEach { l ->
+                val sel = l.key == look.key
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(if (sel) NeonCyan.copy(alpha = 0.12f) else Panel)
+                        .border(
+                            1.dp,
+                            if (sel) NeonCyan else Panel,
+                            RoundedCornerShape(12.dp)
+                        )
+                        .clickable {
+                            onLook(l)
+                            if (l.needsOverlay) onDepthForLook(l.depth, l.warmth)
+                            // Seed the offline pipeline from the same numbers,
+                            // so the sliders below agree with the active look.
+                            denoise = l.denoise.toFloat()
+                            sharpen = l.sharpen.toFloat()
+                            saturation = l.saturation.toFloat()
+                            contrast = l.contrast.toFloat()
+                            warmthIn = l.warmth.toFloat()
+                        }
+                        .padding(horizontal = 12.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            if (l.custom) l.title + "  (imported)" else l.title,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Black,
+                            color = if (sel) NeonCyan else Ink
+                        )
+                        Text(l.blurb, fontSize = 10.sp, color = Muted, lineHeight = 14.sp)
+                    }
+                    if (sel) {
+                        Text("ON", fontSize = 11.sp, color = NeonCyan, fontWeight = FontWeight.Black)
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(10.dp))
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            TextButton(
+                onClick = {
+                    val text = LookPresets.exportJson(imported)
+                    val f = File(
+                        ctx.getExternalFilesDir(null) ?: ctx.filesDir,
+                        "msj_looks.json"
+                    )
+                    f.writeText(text)
+                    note = "Exported ${looks.size} looks to ${f.name}"
+                },
+                modifier = Modifier.weight(1f)
+            ) { Text("EXPORT", fontSize = 10.sp, color = NeonCyan) }
+
+            TextButton(
+                onClick = { picker.launch("*/*") },
+                modifier = Modifier.weight(1f)
+            ) { Text("IMPORT JSON", fontSize = 10.sp, color = NeonCyan) }
+        }
+        Text(
+            "Applies on its own the moment a tracked game opens. Tint and refresh are " +
+                "handed back when you leave the game. No root, no injector.",
+            fontSize = 10.sp, color = Muted, lineHeight = 15.sp
         )
         Spacer(Modifier.height(18.dp))
 
