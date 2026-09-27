@@ -4,7 +4,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -31,7 +30,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -41,10 +39,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import android.graphics.BitmapFactory
 import com.msj.gfx.core.ColorOverlayService
 import com.msj.gfx.core.DisplayController
-import com.msj.gfx.core.ImageEnhancer
 import com.msj.gfx.core.LookPreset
 import com.msj.gfx.core.LookPresets
 import com.msj.gfx.core.GameCatalog
@@ -54,9 +50,6 @@ import com.msj.gfx.core.PerfSnapshot
 import com.msj.gfx.core.Preset
 import com.msj.gfx.core.Presets
 import com.msj.gfx.core.SettingsStore
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.roundToInt
 
@@ -905,32 +898,25 @@ private fun EnhanceTab(
     onImported: (List<LookPreset>) -> Unit
 ) {
     val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
-
-    var source by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
-    var result by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
-    var busy by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf("") }
 
-    var denoise by remember { mutableFloatStateOf(0f) }
-    var sharpen by remember { mutableFloatStateOf(45f) }
-    var saturation by remember { mutableFloatStateOf(130f) }
-    var contrast by remember { mutableFloatStateOf(112f) }
-    var warmthIn by remember { mutableFloatStateOf(8f) }
-    var scaleIdx by remember { mutableIntStateOf(0) }
-
-    val picker = rememberLauncherForActivityResult(
+    // JSON only now - the launcher is kept for look import, nothing else.
+    val importPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri ->
-        if (uri != null) {
-            val bmp = runCatching {
-                ctx.contentResolver.openInputStream(uri)?.use {
-                    BitmapFactory.decodeStream(it)
-                }
-            }.getOrNull()
-            source = bmp
-            result = null
-            note = if (bmp == null) "Could not read that image." else ""
+        if (uri == null) return@rememberLauncherForActivityResult
+        val text = runCatching {
+            ctx.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
+        }.getOrNull()
+        if (text == null) {
+            note = "Could not read that file."
+        } else {
+            val got = LookPresets.importJson(text)
+            if (got.isEmpty()) note = "No valid looks in that file."
+            else {
+                onImported(got)
+                note = "Imported ${got.size} look(s)."
+            }
         }
     }
 
@@ -957,15 +943,29 @@ private fun EnhanceTab(
             .padding(horizontal = 18.dp)
     ) {
         Spacer(Modifier.height(16.dp))
-        Text("VISUAL ENHANCER", fontSize = 24.sp, fontWeight = FontWeight.Black, color = NeonCyan)
+        Text("GRAPHICS LOOKS", fontSize = 24.sp, fontWeight = FontWeight.Black, color = NeonCyan)
         Text(
-            "Live colour layer over other apps, plus an offline sharpen pipeline",
+            "One tap, applied the moment a game opens and handed back when you leave",
             fontSize = 12.sp, color = Muted, lineHeight = 17.sp
         )
         Spacer(Modifier.height(18.dp))
 
-        // ---- looks: the one-tap version of everything below ----
-        SectionLabel("LOOKS - AUTO-APPLY ON GAME LAUNCH")
+        if (!overlayGranted) {
+            Notice(
+                "Looks need \"Display over other apps\". The tint is composited by " +
+                    "SurfaceFlinger on top of the game - we never enter its process.",
+                WarnYellow
+            )
+            Spacer(Modifier.height(10.dp))
+            Button(
+                onClick = onRequestOverlay,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp)
+            ) { Text("GRANT OVERLAY PERMISSION", fontWeight = FontWeight.Black, fontSize = 12.sp) }
+            Spacer(Modifier.height(18.dp))
+        }
+
+        SectionLabel("LOOKS")
         val looks = LookPresets.all(imported)
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             looks.forEach { l ->
@@ -975,21 +975,10 @@ private fun EnhanceTab(
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
                         .background(if (sel) NeonCyan.copy(alpha = 0.12f) else Panel)
-                        .border(
-                            1.dp,
-                            if (sel) NeonCyan else Panel,
-                            RoundedCornerShape(12.dp)
-                        )
+                        .border(1.dp, if (sel) NeonCyan else Panel, RoundedCornerShape(12.dp))
                         .clickable {
                             onLook(l)
                             if (l.needsOverlay) onDepthForLook(l.depth, l.warmth)
-                            // Seed the offline pipeline from the same numbers,
-                            // so the sliders below agree with the active look.
-                            denoise = l.denoise.toFloat()
-                            sharpen = l.sharpen.toFloat()
-                            saturation = l.saturation.toFloat()
-                            contrast = l.contrast.toFloat()
-                            warmthIn = l.warmth.toFloat()
                         }
                         .padding(horizontal = 12.dp, vertical = 9.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -1018,274 +1007,68 @@ private fun EnhanceTab(
             TextButton(
                 onClick = {
                     val text = LookPresets.exportJson(imported)
-                    val f = File(
-                        ctx.getExternalFilesDir(null) ?: ctx.filesDir,
-                        "msj_looks.json"
-                    )
-                    f.writeText(text)
-                    note = "Exported ${looks.size} looks to ${f.name}"
+                    val f = File(ctx.getExternalFilesDir(null) ?: ctx.filesDir, "msj_looks.json")
+                    runCatching { f.writeText(text) }
+                        .onSuccess { note = "Exported ${looks.size} looks to ${f.name}" }
+                        .onFailure { note = "Could not write the file." }
                 },
                 modifier = Modifier.weight(1f)
             ) { Text("EXPORT", fontSize = 10.sp, color = NeonCyan) }
 
             TextButton(
-                onClick = { picker.launch("*/*") },
+                onClick = { importPicker.launch("*/*") },
                 modifier = Modifier.weight(1f)
             ) { Text("IMPORT JSON", fontSize = 10.sp, color = NeonCyan) }
         }
-        Text(
-            "Applies on its own the moment a tracked game opens. Tint and refresh are " +
-                "handed back when you leave the game. No root, no injector.",
-            fontSize = 10.sp, color = Muted, lineHeight = 15.sp
-        )
-        Spacer(Modifier.height(18.dp))
-
-        if (!overlayGranted) {
-            Notice(
-                "The live layer needs \"Display over other apps\". It is composited by " +
-                    "SurfaceFlinger on top of the game - we never enter its process.",
-                WarnYellow
-            )
-            Spacer(Modifier.height(10.dp))
-            Button(
-                onClick = onRequestOverlay,
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(14.dp)
-            ) { Text("GRANT OVERLAY PERMISSION", fontWeight = FontWeight.Black, fontSize = 12.sp) }
-            Spacer(Modifier.height(18.dp))
-        } else {
-            SectionLabel("LIVE LAYER OVER GAMES")
-            SliderRow("Depth", depth, 0, 40, "%", onDepth)
-            SliderRow("Warmth", warmth, -60, 60, "", onWarmth)
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "Depth darkens the frame a little, which is what makes saturated art read " +
-                    "richer on an OLED. Warmth shifts the white point amber or blue. Both are " +
-                    "tint layers, not a re-map of the game's own pixels - that is the OEM " +
-                    "display mode below.",
-                fontSize = 10.sp, color = Muted, lineHeight = 15.sp
-            )
-            Spacer(Modifier.height(14.dp))
-
-            // The real colour re-map, if this OEM exposes it. Best-effort by
-            // design: setOemVividMode returns false when the key is absent,
-            // which is most non-Samsung builds, and we say so instead of
-            // leaving a switch that silently does nothing.
-            var oemSupported by remember { mutableStateOf<Boolean?>(null) }
-            var oemOn by remember { mutableStateOf(false) }
-            TextButton(
-                onClick = {
-                    val now = !oemOn
-                    val ok = DisplayController.setOemVividMode(now)
-                    if (ok) { oemOn = now; oemSupported = true }
-                    else oemSupported = false
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(
-                    if (oemOn) "OEM VIVID: ON" else "OEM VIVID COLOUR PROFILE",
-                    color = if (oemOn == false) Muted else NeonCyan,
-                    fontSize = 11.sp, fontWeight = FontWeight.Black
-                )
-            }
-            if (oemSupported == false) {
-                Text(
-                    "This build does not expose a display colour mode, so it cannot be set " +
-                        "without root. The tint layer above is the fallback.",
-                    fontSize = 10.sp, color = Muted, lineHeight = 15.sp
-                )
-            } else if (oemSupported == true) {
-                Text(
-                    "Applied by the display driver, downstream of the game - a genuine " +
-                        "colour re-map rather than a tint.",
-                    fontSize = 10.sp, color = OkGreen, lineHeight = 15.sp
-                )
-            }
-
-            Spacer(Modifier.height(14.dp))
-            SectionLabel("IMAGE PIPELINE")
-        }
-
-        Spacer(Modifier.height(10.dp))
-        Text(
-            "Denoise \u2192 Sharpen \u2192 Colour \u2192 Scale",
-            fontSize = 11.sp, color = NeonCyan, fontWeight = FontWeight.Bold
-        )
-        Spacer(Modifier.height(10.dp))
-
-        Button(
-            onClick = { picker.launch("image/*") },
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(14.dp),
-            enabled = !busy
-        ) { Text("PICK IMAGE", fontWeight = FontWeight.Black, fontSize = 12.sp) }
-
-        Spacer(Modifier.height(12.dp))
-
-        SectionLabel("PRESETS")
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            ImageEnhancer.Presets.ALL.forEach { (label, pre) ->
-                TextButton(
-                    onClick = {
-                        denoise = pre.denoise.toFloat()
-                        sharpen = pre.sharpen.toFloat()
-                        saturation = pre.saturation.toFloat()
-                        contrast = pre.contrast.toFloat()
-                        warmthIn = pre.warmth.toFloat()
-                        // Index 3 in listOf(1f, 1.25f, 1.5f, 2f, 3f) is 2x,
-                        // and "Upscale 2x" is the only preset that sets it.
-                        if (pre.scale == 2f) scaleIdx = 3
-                    },
-                    modifier = Modifier.weight(1f)
-                ) { Text(label.uppercase(), fontSize = 10.sp, color = NeonCyan) }
-            }
-        }
-
-        Spacer(Modifier.height(8.dp))
-        SliderRowF("Denoise", denoise, 0f, 100f, "%", { denoise = it })
-        SliderRowF("Sharpen", sharpen, 0f, 100f, "%", { sharpen = it })
-        SliderRowF("Saturation", saturation, 0f, 250f, "%", { saturation = it })
-        SliderRowF("Contrast", contrast, 50f, 160f, "%", { contrast = it })
-        SliderRowF("Warmth", warmthIn, -50f, 50f, "", { warmthIn = it })
-
-        Spacer(Modifier.height(8.dp))
-        SectionLabel("SCALE")
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            listOf(1f, 1.25f, 1.5f, 2f, 3f).forEachIndexed { i, f ->
-                TextButton(
-                    onClick = { scaleIdx = i },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text(
-                        if (f == 1f) "1x" else "${f}x",
-                        fontSize = 11.sp,
-                        color = if (scaleIdx == i) NeonCyan else Muted
-                    )
-                }
-            }
-        }
-
-        Spacer(Modifier.height(14.dp))
-        Button(
-            onClick = {
-                val s = source ?: return@Button
-                busy = true
-                note = ""
-                val p = ImageEnhancer.Params(
-                    denoise = denoise.toInt(),
-                    sharpen = sharpen.toInt(),
-                    saturation = saturation.toInt(),
-                    contrast = contrast.toInt(),
-                    warmth = warmthIn.toInt(),
-                    scale = listOf(1f, 1.25f, 1.5f, 2f, 3f)[scaleIdx]
-                )
-                scope.launch(Dispatchers.Default) {
-                    val out = runCatching { ImageEnhancer.process(s, p) }.getOrNull()
-                    withContext(Dispatchers.Main) {
-                        result = out
-                        busy = false
-                        note = if (out == null) "Processing failed." else ""
-                    }
-                }
-            },
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(14.dp),
-            enabled = source != null && !busy
-        ) {
-            Text(
-                if (busy) "PROCESSING..." else "ENHANCE",
-                fontWeight = FontWeight.Black, fontSize = 13.sp
-            )
-        }
-
-        Spacer(Modifier.height(12.dp))
-        Button(
-            onClick = {
-                val out = result ?: return@Button
-                val dir = ctx.getExternalFilesDir(null) ?: ctx.filesDir
-                val file = File(dir, "msj_enhanced_${System.currentTimeMillis()}.jpg")
-                val saved = ImageEnhancer.save(out, file, asPng = false, quality = 95)
-                note = if (saved != null) "Saved: ${saved.name}" else "Could not write the file."
-            },
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(14.dp),
-            enabled = result != null && !busy
-        ) { Text("SAVE TO GALLERY FOLDER", fontWeight = FontWeight.Black, fontSize = 12.sp) }
-
         if (note.isNotBlank()) {
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(6.dp))
             Text(note, fontSize = 11.sp, color = NeonCyan, fontFamily = FontFamily.Monospace)
         }
 
-        Spacer(Modifier.height(16.dp))
-        source?.let { src ->
-            Text("ORIGINAL  ${src.width}\u00d7${src.height}", fontSize = 10.sp, color = Muted)
-            Spacer(Modifier.height(6.dp))
-            Image(
-                bitmap = src.asImageBitmap(),
-                contentDescription = null,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(14.dp))
+        Spacer(Modifier.height(20.dp))
+        SectionLabel("FINE TUNE THE TINT")
+        SliderRow("Depth", depth, 0, 40, "%", onDepth)
+        SliderRow("Warmth", warmth, -60, 60, "", onWarmth)
+        Text(
+            "Depth darkens the frame, which is what makes saturated art read richer on " +
+                "an OLED. Warmth shifts the white point. Both are tint layers over the " +
+                "game's frame, not a re-map of its pixels - that is the OEM mode below.",
+            fontSize = 10.sp, color = Muted, lineHeight = 15.sp
+        )
+
+        Spacer(Modifier.height(14.dp))
+        var oemSupported by remember { mutableStateOf<Boolean?>(null) }
+        var oemOn by remember { mutableStateOf(false) }
+        TextButton(
+            onClick = {
+                val now = !oemOn
+                val ok = DisplayController.setOemVividMode(now)
+                if (ok) { oemOn = now; oemSupported = true }
+                else oemSupported = false
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                if (oemOn) "OEM VIVID: ON" else "OEM VIVID COLOUR PROFILE",
+                color = if (oemOn) NeonCyan else Muted,
+                fontSize = 11.sp, fontWeight = FontWeight.Black
             )
         }
-        result?.let { r ->
-            Spacer(Modifier.height(14.dp))
+        if (oemSupported == false) {
             Text(
-                "ENHANCED  ${r.width}\u00d7${r.height}",
-                fontSize = 10.sp, color = NeonCyan, fontWeight = FontWeight.Bold
+                "This build does not expose a display colour mode, so it cannot be set " +
+                    "without root. The tint above is the fallback.",
+                fontSize = 10.sp, color = Muted, lineHeight = 15.sp
             )
-            Spacer(Modifier.height(6.dp))
-            Image(
-                bitmap = r.asImageBitmap(),
-                contentDescription = null,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(14.dp))
+        } else if (oemSupported == true) {
+            Text(
+                "Applied by the display driver, downstream of the game - a genuine " +
+                    "colour re-map rather than a tint.",
+                fontSize = 10.sp, color = OkGreen, lineHeight = 15.sp
             )
         }
 
         Spacer(Modifier.height(24.dp))
-    }
-}
-
-/** Float slider row for the image-pipeline parameters, whole-number readout. */
-@Composable
-private fun SliderRowF(
-    label: String,
-    value: Float,
-    min: Float,
-    max: Float,
-    suffix: String,
-    onChange: (Float) -> Unit
-) {
-    Row(
-        Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            label,
-            fontSize = 12.sp, color = Ink, fontWeight = FontWeight.Bold,
-            modifier = Modifier.width(96.dp)
-        )
-        Slider(
-            value = value.coerceIn(min, max),
-            onValueChange = onChange,
-            valueRange = min..max,
-            modifier = Modifier.weight(1f)
-        )
-        Text(
-            "${value.roundToInt()}$suffix",
-            fontSize = 11.sp, color = NeonCyan, fontFamily = FontFamily.Monospace,
-            modifier = Modifier.width(54.dp),
-            textAlign = TextAlign.End
-        )
     }
 }
 
