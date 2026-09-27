@@ -27,6 +27,7 @@ class GameWatcher(
 ) {
     private var job: Job? = null
     private var lookJob: Job? = null
+    private var boostJob: Job? = null
 
     enum class State { UNKNOWN_NO_PERMISSION, IDLE, IN_GAME }
 
@@ -57,6 +58,18 @@ class GameWatcher(
      * even if the selection moves underneath us.
      */
     private var appliedLook: LookPreset? = null
+
+    /**
+     * Brightness as found before we raised it, plus whether we raised it at all.
+     *
+     * This is tracked separately from [appliedLook] on purpose. Brightness used
+     * to be a side effect of choosing a look, which meant tapping a preset
+     * forced manual brightness mode and flashed the screen - reported as
+     * "flashlight screen when select preset when game on". It is now its own
+     * explicit action, and this field is what lets it be undone.
+     */
+    private var brightnessSnap: DisplayController.BrightnessSnapshot? = null
+    private var brightnessApplied = false
     private var previous: GameCatalog.Game? = null
     private var previousPkg: String? = null
 
@@ -83,6 +96,16 @@ class GameWatcher(
                     if (applied) applyLook()
                 }
             }
+
+        // The brightness slider is the only thing that may move luminance, and
+        // only because the user moved it.
+        boostJob = scope.launch(Dispatchers.Default) {
+            runCatching {
+                SettingsStore.get().brightnessBoost.collect { _ ->
+                    if (applied) applyBrightnessBoost()
+                }
+            }
+        }
         }
     }
 
@@ -143,6 +166,9 @@ class GameWatcher(
             runCatching { MemoryTools.trim() }
         }
         applyLook()
+        // Boost, if the user asked for one, comes up on game entry - this is
+        // an explicit setting, unlike luminance as a side effect of a look.
+        applyBrightnessBoost()
     }
 
     /**
@@ -179,12 +205,6 @@ class GameWatcher(
             val panel = DisplayProfile.read(ctx, store.panelIsOled.value)
             val fitted = look.adaptTo(panel)
 
-            // Brightness headroom first: it is the one control that genuinely
-            // puts more signal above the panel's noise floor.
-            if (store.brightnessBoost.value > 0) {
-                runCatching { DisplayController.setBrightnessHeadroom(store.brightnessBoost.value) }
-            }
-
             // Overlay tint: depth + warmth over the game's own frame.
             if (fitted.needsOverlay) {
                 runCatching {
@@ -219,9 +239,41 @@ class GameWatcher(
         runCatching { ColorOverlayService.stop(Ctx.get()) }
         if (was.refreshHz > 0) runCatching { DisplayController.releasePeakRefresh() }
         if (was.oemVivid) runCatching { DisplayController.setOemVividMode(false) }
-        if (SettingsStore.get().brightnessBoost.value > 0) {
-            runCatching { DisplayController.restoreBrightness() }
+    }
+
+    /**
+     * Apply or undo the brightness headroom boost.
+     *
+     * Only ever called from the brightness slider, never from preset selection:
+     * a colour change must not move the panel's luminance. Safe to call
+     * repeatedly - the write is idempotent and capped, and moving the slider to
+     * zero restores the captured snapshot rather than forcing automatic mode on
+     * a user who had deliberately set brightness by hand.
+     */
+    fun applyBrightnessBoost() {
+        if (!applied) return
+        val boost = SettingsStore.get().brightnessBoost.value
+        if (boost <= 0) {
+            releaseBrightness()
+            return
         }
+        runCatching {
+            // Capture before the first raise so restore has something real.
+            if (!brightnessApplied) brightnessSnap = DisplayController.captureBrightness()
+            // Pass the captured baseline every time. Re-reading the live value
+            // here is what made repeated preset taps ratchet brightness up.
+            val baseline = brightnessSnap?.value
+            if (DisplayController.setBrightnessHeadroom(boost, baseline)) brightnessApplied = true
+        }
+    }
+
+    /** Hand brightness back exactly as it was found. */
+    fun releaseBrightness() {
+        if (!brightnessApplied) return
+        brightnessApplied = false
+        val snap = brightnessSnap
+        brightnessSnap = null
+        runCatching { DisplayController.restoreBrightness(snap) }
     }
 
     /** Hand the display back and stop trimming, so we do not drain a battery. */
@@ -235,6 +287,10 @@ class GameWatcher(
         // Put the screen back the way we found it. Leaving a tint over whatever
         // app the user opens next is the kind of thing that gets an app removed.
         clearLook()
+        // Unconditional, and not gated on the boost still being non-zero: if
+        // the user zeroed the slider mid-game the old check skipped the restore
+        // and left the panel stuck in forced manual brightness.
+        releaseBrightness()
     }
 
     companion object {
@@ -248,6 +304,8 @@ class GameWatcher(
         job = null
         lookJob?.cancel()
         lookJob = null
+        boostJob?.cancel()
+        boostJob = null
         previousPkg = null
         previous = null
         _current.value = null

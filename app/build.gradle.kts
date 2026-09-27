@@ -109,6 +109,12 @@ val namedReleaseApk by tasks.registering(Copy::class) {
     description = "Copies the release APK out as M.S.J GFX.apk"
     from(layout.buildDirectory.dir("outputs/apk/release")) {
         include("*.apk")
+        // assembleRelease writes BOTH app-release.apk and
+        // app-release-unsigned.apk into this directory when the signing config
+        // resolves. Globbing "*.apk" picks up both, they rename onto the same
+        // destination, and Copy lets the later one win - which shipped an
+        // unsigned APK under the product name. Take the signed one only.
+        exclude("**/*-unsigned*.apk", "**/*unsigned*.apk")
         rename { "M.S.J GFX.apk" }
     }
     into(layout.buildDirectory.dir("outputs/apk/named"))

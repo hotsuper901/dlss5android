@@ -320,27 +320,116 @@ object DisplayController {
      * the display HAL clamps anything it considers out of range, so this
      * returns whatever the system actually accepted rather than pretending.
      */
-    fun setBrightnessHeadroom(boost: Int): Boolean = runCatching {
-        if (!Settings.System.canWrite(Ctx.get())) return false
+    /**
+     * Brightness as it was before we touched it, so it can be handed back
+     * exactly rather than guessed at.
+     */
+    data class BrightnessSnapshot(val mode: Int, val value: Int)
+
+    /**
+     * Hard ceiling on the brightness we are willing to write.
+     *
+     * This number is a bug fix, not a taste call. Pushing manual brightness to
+     * 255 is what produced the reported "flashlight screen" on preset select:
+     * several OEM display HALs treat a saturated manual brightness as a request
+     * for outdoor boost, and satisfy it by driving the LED torch. The user sees
+     * a blazing white flash and, on some devices, a lit torch.
+     *
+     * 204 is 80% of the 0..255 range - bright enough to be a real headroom
+     * gain, far enough from the ceiling that no vendor boost path fires.
+     */
+    const val MAX_SAFE_BRIGHTNESS = 204
+
+    /** Used only when the system reports no usable manual value. */
+    private const val FALLBACK_BRIGHTNESS = 128
+
+    private const val MODE_MANUAL = 0
+    private const val MODE_AUTOMATIC = -1
+
+    /** Reads the current brightness, or null if it cannot be read sensibly. */
+    fun captureBrightness(): BrightnessSnapshot? = runCatching {
         val res = Ctx.get().contentResolver
+        val mode = Settings.System.getInt(res, K_SCREEN_BRIGHTNESS_MODE, MODE_AUTOMATIC)
+        val value = Settings.System.getInt(res, K_SCREEN_BRIGHTNESS, -1)
+        // -1 is what many builds report while the ambient sensor owns the
+        // panel. There is no manual value to capture in that case.
+        if (value !in 0..255) null else BrightnessSnapshot(mode, value)
+    }.getOrNull()
+
+    /**
+     * Raise brightness for gaming, capped so it cannot trip a vendor boost.
+     *
+     * Two properties matter beyond "it gets brighter":
+     *
+     * Idempotent - the target is a pure function of (current, boost) and both
+     * saturate at [MAX_SAFE_BRIGHTNESS], so tapping a preset repeatedly cannot
+     * ratchet the panel upwards. The old version re-read and re-added on every
+     * call, which is what made the flash strobe rather than flash once.
+     *
+     * Bounded - it never writes 255, so the outdoor/torch path is never
+     * requested. See [MAX_SAFE_BRIGHTNESS].
+     */
+    /**
+     * The brightness value to write, as a pure function. Split out so the cap
+     * and the idempotence are testable without a device - this is the exact
+     * arithmetic that used to reach 255 and light the torch.
+     *
+     * [baseline] is the brightness captured *before* the first raise, never a
+     * fresh read of the live value. That distinction is the whole fix for the
+     * reported bug: reading the live value made the function cumulative, so
+     * every preset tap re-read whatever the last tap had written and added the
+     * boost again, walking the panel steadily up to the ceiling. Off a fixed
+     * baseline, the same boost always yields the same value, so applying the
+     * same preset fifty times changes nothing after the first.
+     *
+     * Never returns 0 (a black screen) and never above [MAX_SAFE_BRIGHTNESS].
+     */
+    fun brightnessTarget(baseline: Int, boost: Int): Int {
+        val base = if (baseline in 1..255) baseline else FALLBACK_BRIGHTNESS
         val b = boost.coerceIn(0, 100)
-        if (b == 0) return restoreBrightness()
-        // Manual mode, otherwise the ambient sensor overwrites us within a
-        // second or two and the boost silently evaporates.
-        Settings.System.putInt(res, K_SCREEN_BRIGHTNESS_MODE, 0)
-        val current = Settings.System.getInt(res, K_SCREEN_BRIGHTNESS, 128)
-        val target = (current + (b * 1.5f)).toInt().coerceIn(1, 255)
-        Settings.System.putInt(res, K_SCREEN_BRIGHTNESS, target)
-        true
+        return (base + (b * 0.7f).toInt()).coerceIn(1, MAX_SAFE_BRIGHTNESS)
+    }
+
+    /**
+     * @param baseline the brightness captured before the first raise, or null
+     *   to read the current value once and use that as the baseline.
+     */
+    fun setBrightnessHeadroom(boost: Int, baseline: Int? = null): Boolean = runCatching {
+        if (!Settings.System.canWrite(Ctx.get())) return false
+        val b = boost.coerceIn(0, 100)
+        if (b == 0) return false
+        val res = Ctx.get().contentResolver
+        // Fixed baseline, never the live value - see brightnessTarget.
+        val base = baseline
+            ?: captureBrightness()?.value
+            ?: Settings.System.getInt(res, K_SCREEN_BRIGHTNESS, -1)
+        val target = brightnessTarget(base, b)
+
+        // Manual mode first, otherwise the ambient sensor overwrites us within
+        // a second and the boost silently evaporates.
+        val modeWritten = Settings.System.putInt(res, K_SCREEN_BRIGHTNESS_MODE, MODE_MANUAL)
+        if (modeWritten == null) return false
+        // Report what the system actually took, not what we asked for - the
+        // display HAL clamps and some devices refuse the write outright.
+        Settings.System.putInt(res, K_SCREEN_BRIGHTNESS, target) != null
     }.getOrDefault(false)
 
-    /** Hand brightness back to automatic on game exit. */
-    fun restoreBrightness(): Boolean = runCatching {
+    /**
+     * Put brightness back the way it was found.
+     *
+     * Prefer the captured snapshot. Falling back to forcing automatic mode
+     * discards a user's deliberate manual brightness setting, which is the
+     * kind of "helpful" side effect that outlives the session that caused it.
+     */
+    fun restoreBrightness(snap: BrightnessSnapshot?): Boolean = runCatching {
         if (!Settings.System.canWrite(Ctx.get())) return false
-        Settings.System.putInt(
-            Ctx.get().contentResolver, K_SCREEN_BRIGHTNESS_MODE, -1
-        )
-        true
+        val res = Ctx.get().contentResolver
+        if (snap == null) {
+            Settings.System.putInt(res, K_SCREEN_BRIGHTNESS_MODE, MODE_AUTOMATIC) != null
+        } else {
+            Settings.System.putInt(res, K_SCREEN_BRIGHTNESS, snap.value)
+            Settings.System.putInt(res, K_SCREEN_BRIGHTNESS_MODE, snap.mode) != null
+        }
     }.getOrDefault(false)
 
     fun setOemVividMode(vivid: Boolean): Boolean = runCatching {

@@ -146,8 +146,13 @@ jobs:
           # The gradle task already emitted the exact product name; copy from
           # there so the artifact payload and a local build agree.
           SRC="app/build/outputs/apk/named/M.S.J GFX.apk"
-          test -f "$SRC" || SRC=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          test -f "$SRC" || SRC=$(ls app/build/outputs/apk/release/*.apk | grep -v unsigned | head -1)
           mkdir -p dist
+          # Refuse to ship an unsigned APK. v1 META-INF signature files are
+          # absent under v2/v3-only signing, so the check looks for the APK
+          # Signing Block, which is where v2+ signatures actually live.
+          python3 scripts/verify-apk-signature.py "$SRC"
+          ls -la app/build/outputs/apk/release/ dist/
           cp "$SRC" "dist/M.S.J GFX.apk"
           ls -la dist/
           sha256sum "dist/M.S.J GFX.apk" | tee dist/SHA256SUMS.txt
