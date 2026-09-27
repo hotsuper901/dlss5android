@@ -777,6 +777,10 @@ private fun ProfileChip(label: String, value: String, modifier: Modifier = Modif
 @Composable
 private fun GameCard(g: GameCatalog.Game, onOpenGame: (String) -> Unit, installed: Boolean = true) {
     val accent = Color(g.accent)
+    // LocalClipboardManager.current is a @Composable getter, so it has to be
+    // read in composable scope - calling it inside the onClick lambda is a
+    // compile error, not just untidy.
+    val clipboard = LocalClipboardManager.current
     Column(
         Modifier
             .fillMaxWidth()
@@ -818,9 +822,7 @@ private fun GameCard(g: GameCatalog.Game, onOpenGame: (String) -> Unit, installe
         Spacer(Modifier.height(8.dp))
         TextButton(
             onClick = {
-                LocalClipboardManager.current.setText(
-                    AnnotatedString(GraphicsEnhancer.checklistFor(g))
-                )
+                clipboard.setText(AnnotatedString(GraphicsEnhancer.checklistFor(g)))
             },
             modifier = Modifier.fillMaxWidth()
         ) {
