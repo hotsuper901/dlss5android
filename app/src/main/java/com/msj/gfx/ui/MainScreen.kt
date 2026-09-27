@@ -973,6 +973,43 @@ private fun EnhanceTab(
                 fontSize = 10.sp, color = Muted, lineHeight = 15.sp
             )
             Spacer(Modifier.height(14.dp))
+
+            // The real colour re-map, if this OEM exposes it. Best-effort by
+            // design: setOemVividMode returns false when the key is absent,
+            // which is most non-Samsung builds, and we say so instead of
+            // leaving a switch that silently does nothing.
+            var oemSupported by remember { mutableStateOf<Boolean?>(null) }
+            var oemOn by remember { mutableStateOf(false) }
+            TextButton(
+                onClick = {
+                    val now = !oemOn
+                    val ok = DisplayController.setOemVividMode(now)
+                    if (ok) { oemOn = now; oemSupported = true }
+                    else oemSupported = false
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    if (oemOn) "OEM VIVID: ON" else "OEM VIVID COLOUR PROFILE",
+                    color = if (oemOn == false) Muted else NeonCyan,
+                    fontSize = 11.sp, fontWeight = FontWeight.Black
+                )
+            }
+            if (oemSupported == false) {
+                Text(
+                    "This build does not expose a display colour mode, so it cannot be set " +
+                        "without root. The tint layer above is the fallback.",
+                    fontSize = 10.sp, color = Muted, lineHeight = 15.sp
+                )
+            } else if (oemSupported == true) {
+                Text(
+                    "Applied by the display driver, downstream of the game - a genuine " +
+                        "colour re-map rather than a tint.",
+                    fontSize = 10.sp, color = OkGreen, lineHeight = 15.sp
+                )
+            }
+
+            Spacer(Modifier.height(14.dp))
             SectionLabel("IMAGE PIPELINE")
         }
 
