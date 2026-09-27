@@ -179,9 +179,10 @@ private fun DashTab(
 
         Spacer(Modifier.height(20.dp))
         Text(
-            "Creator: M.S.J",
+            text = "Creator: M.S.J",
             color = Muted, fontSize = 11.sp,
-            modifier = Modifier.fillMaxWidth(), horizontalAlignment = TextAlign.Center
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth()
         )
         Spacer(Modifier.height(24.dp))
     }

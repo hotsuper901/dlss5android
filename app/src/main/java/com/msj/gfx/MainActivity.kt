@@ -8,7 +8,6 @@ import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
@@ -20,21 +19,8 @@ import com.msj.gfx.ui.MsjTheme
 
 class MainActivity : ComponentActivity() {
 
-    private val overlayPermission =
-        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-            // Whatever the user answered, re-read the real value rather than
-            // trusting the result code - vendors return garbage here.
-            val granted = Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this)
-            SettingsStore.get().setOverlay(granted)
-            if (granted) GameOverlayService.start(this) else GameOverlayService.stop(this)
-        }
-
-    private val notificationPermission =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) {
-            // A denied notification permission does not stop a foreground
-            // service on API 33+, the notification just is not shown.
-            CoolerService.start(this)
-        }
+    // Overlay permission is granted in Settings, which does not reliably return
+    // a result code, so onResume re-reads the real value instead of trusting one.
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

@@ -82,7 +82,7 @@ class GameOverlayService : android.app.Service() {
             orientation = LinearLayout.VERTICAL
             setPadding(pad * 2, pad, pad * 2, pad)
             background = GradientDrawable().apply {
-                cornerRadius = dp(14f)
+                setCornerRadius(dp(14f).toFloat())
                 setColor(Color.argb(150, 7, 10, 20))
                 setStroke(dp(1f), Color.argb(90, 0, 229, 255))
             }

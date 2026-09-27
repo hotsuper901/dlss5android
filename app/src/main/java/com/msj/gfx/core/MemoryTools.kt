@@ -28,7 +28,7 @@ object MemoryTools {
         // On API 34+ this is a no-op for background apps, which is exactly why we
         // do it from a foreground service where the hint is still honoured.
         runCatching {
-            (Ctx.get() as? android.app.ComponentCallbacks2)?.onTrimMemory(TRIM_CRITICAL)
+            (Ctx.get() as? android.content.ComponentCallbacks2)?.onTrimMemory(TRIM_CRITICAL)
         }
 
         // SIGUSR1 is the ART fast-GC request. Harmless if the runtime ignores it.

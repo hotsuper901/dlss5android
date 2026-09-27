@@ -123,7 +123,7 @@ class CoolerService : Service() {
 
                 notify(buildNotification(
                     "CPU ${s.cpuLoad}% - RAM ${s.ramUsedMb}/${s.ramTotalMb} MB",
-                    s.tempC?.let { "${it.toInt()}°C" } ?: "temp n/a"
+                    (s.batteryTempC ?: s.cpuTempC)?.let { "${it.toInt()}°C" } ?: "temp n/a"
                 ))
             }
             delay(4000)

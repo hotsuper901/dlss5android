@@ -1,10 +1,10 @@
 package com.msj.gfx.core
 
-import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.os.BatteryManager
 import android.os.Build
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -116,12 +116,14 @@ object PerfMonitor {
     }.getOrNull()
 
     private fun battery(): Pair<Float?, Boolean> = runCatching {
-        val bm = Ctx.get().getSystemService(Context.BATTERY_SERVICE) as BatteryManager
-        val t = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
-            (bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_TEMPERATURE)).takeIf { it in -40..250 }?.div(10f)
-        } else null
+        // Sticky broadcast rather than BatteryManager.getIntProperty: the sticky
+        // intent works identically from API 21 up and needs no version gate.
+        val intent = Ctx.get().registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val t = intent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, Int.MIN_VALUE)
+            ?.takeIf { it in -400..2500 }
+            ?.div(10f)
         lastBatteryTemp = t ?: lastBatteryTemp
-        val status = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_STATUS)
+        val status = intent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
         val charging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
             status == BatteryManager.BATTERY_STATUS_FULL
         lastBatteryTemp to charging
@@ -129,8 +131,15 @@ object PerfMonitor {
 
     /** Trims the marketing string down to something that fits in a tile. */
     private fun socName(): String = runCatching {
-        val raw = Build.SOC_MANUFACTURER.ifEmpty { Build.HARDWARE }
-        raw.uppercase()
+        // Build.SOC_MANUFACTURER only exists from API 31. Touching it on Android
+        // 7-11 is a NoSuchFieldError at runtime, so gate it and fall back.
+        val raw = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            Build.SOC_MANUFACTURER.ifEmpty { Build.HARDWARE }
+        } else {
+            Build.HARDWARE
+        }
+        if (raw.isBlank()) "UNKNOWN"
+        else raw.uppercase()
             .replace("SM", "S")
             .replace("MSM", "M")
             .replace("QP", "Q")
@@ -149,10 +158,11 @@ object PerfMonitor {
         val total = (rt.maxMemory() / 1_048_576L)
         val load = sampleCpuLoad()
         val batt = battery()
-        val temp = batt.first ?: cpuTempZone()
+        val zoned = cpuTempZone()
+        val temp = batt.first ?: zoned
         return PerfSnapshot(
             cpuLoad = load,
-            cpuTempC = cpuTempZone(),
+            cpuTempC = zoned,
             batteryTempC = batt.first,
             ramUsedMb = used.toInt(),
             ramTotalMb = total.toInt(),
