@@ -72,40 +72,31 @@ object LookPresets {
     /**
      * The one that matters most on a phone. A real OLED pixel is off at black,
      * so crushing the black point and lifting the mid-tones adds apparent
-     * perceived brightness jump comes from the darks genuinely disappearing
-     * rather than from us pushing the backlight. Refresh stays off by default
-     * because a 120Hz pin is a real battery cost and that should be opt-in.
+     * contrast the panel is physically capable of showing, and the perceived
+     * brightness jump comes from the darks genuinely disappearing rather than
+     * from us pushing the backlight. Refresh stays off by default because a
+     * 120Hz pin is a real battery cost and that should be opt-in.
      */
     val OLED_BOOST = LookPreset(
         "oled", "OLED Boost", "Deep blacks, lifted mids",
         depth = 18, warmth = 4, refreshHz = 0, oemVivid = true
     )
 
-    /** Maximum display refresh, nothing else touched. For input-latency feel. */
-    /**
-     * Was a no-op: refreshHz 0 means "leave the display alone", so the preset
-     * whose entire description is "peak refresh" was asking for nothing.
-     * 120 is a request, not a pin - GameWatcher checks it against the panel's
-     * actual max and silently skips if the screen cannot do it.
-     */
-    val FPS_FOCUS = LookPreset(
-        "fps", "FPS Focus", "Peak refresh, colour left alone",
-        depth = 0, warmth = 0, refreshHz = 120, oemVivid = false
+    val CRUSHED = LookPreset(
+        "crush", "Crushed", "Heaviest blacks, hard contrast",
+        depth = 30, warmth = 0, refreshHz = 0, oemVivid = true
     )
 
-    /** Hard tint. Reads strong on any panel, heavy on OLED. */
-    val POP = LookPreset(
-        "pop", "Anime Pop", "Deeper blacks, strong tint",
-        depth = 6, warmth = 10, refreshHz = 0, oemVivid = true
+    val SUBTLE = LookPreset(
+        "subtle", "Subtle", "Barely there, all day",
+        depth = 5, warmth = 2, refreshHz = 0, oemVivid = false
     )
 
-    /** The teal-and-orange grade. Pushes cool into shadows, warm into skin. */
-    val TEAL_ORANGE = LookPreset(
-        "teal", "Teal / Orange", "Slight depth, warm white point",
-        depth = 14, warmth = 18, refreshHz = 0, oemVivid = false
+    val DARK_ROOM = LookPreset(
+        "dark", "Dark Room", "For a dim room, cuts glare",
+        depth = 24, warmth = -6, refreshHz = 0, oemVivid = false
     )
 
-    /** For late sessions. Warm white point, light touch. */
     val NIGHT = LookPreset(
         "night", "Night Warm", "Amber white point",
         depth = 10, warmth = 34, refreshHz = 0, oemVivid = false
@@ -114,24 +105,111 @@ object LookPresets {
     /**
      * Was "Shadow Lift", and it could never have worked: a tint layer can only
      * darken, and lifting shadows means brightening them. depth clamps to
-     * 0..40, so the -0 it was written with was just a zero wearing a minus
-     * sign, and the preset did nothing at all. Replaced with a cool tint,
-     * which is the one direction this mechanism genuinely goes.
+     * 0..40, so the -0 it was written with was a zero wearing a minus sign and
+     * the preset did nothing at all. This is the one direction the mechanism
+     * genuinely goes.
      */
     val COOL = LookPreset(
         "cool", "Cool Shadow", "Blue tint, cuts glare late at night",
         depth = 12, warmth = -30, refreshHz = 0, oemVivid = false
     )
 
-    /** Everything at once, for measuring what each stage is actually worth. */
+    val ICE = LookPreset(
+        "ice", "Ice", "Hard blue, coldest white point",
+        depth = 8, warmth = -52, refreshHz = 0, oemVivid = false
+    )
+
+    val EMBER = LookPreset(
+        "ember", "Ember", "Strong amber, heavy",
+        depth = 20, warmth = 48, refreshHz = 0, oemVivid = false
+    )
+
+    val SEPIA = LookPreset(
+        "sepia", "Sepia", "Warm and vintage",
+        depth = 14, warmth = 40, refreshHz = 0, oemVivid = false
+    )
+
+    val BLUE_SHIFT = LookPreset(
+        "blue", "Blue Shift", "Strong cool, moderate dark",
+        depth = 16, warmth = -44, refreshHz = 0, oemVivid = false
+    )
+
+    // --- combinations -------------------------------------------------------
+
+    val POP = LookPreset(
+        "pop", "Anime Pop", "Deeper blacks, strong tint",
+        depth = 6, warmth = 10, refreshHz = 0, oemVivid = true
+    )
+
+    val TEAL_ORANGE = LookPreset(
+        "teal", "Teal / Orange", "Slight depth, warm white point",
+        depth = 14, warmth = 18, refreshHz = 0, oemVivid = false
+    )
+
+    val CINEMATIC = LookPreset(
+        "cine", "Cinema", "Deep, slightly warm, vivid profile",
+        depth = 22, warmth = 12, refreshHz = 0, oemVivid = true
+    )
+
+    val MATTE = LookPreset(
+        "matte", "Matte", "Flat and even, no crush",
+        depth = 8, warmth = -4, refreshHz = 0, oemVivid = false
+    )
+
+    val CONTRAST_KING = LookPreset(
+        "king", "Max Contrast", "Blackest blacks plus vivid",
+        depth = 38, warmth = 0, refreshHz = 0, oemVivid = true
+    )
+
     val MAX = LookPreset(
         "max", "Max Look", "Heavy depth plus vivid profile",
         depth = 26, warmth = 0, refreshHz = 0, oemVivid = true
     )
 
-    val BUILT_IN = listOf(
-        OFF, OLED_BOOST, FPS_FOCUS, POP, TEAL_ORANGE, NIGHT, COOL, MAX
+    // --- performance --------------------------------------------------------
+
+    /**
+     * refreshHz is a request, not a pin: GameWatcher compares it against the
+     * panel's actual max and skips if the screen cannot reach it.
+     */
+    val FPS_FOCUS = LookPreset(
+        "fps", "FPS Focus", "Peak refresh, colour untouched",
+        depth = 0, warmth = 0, refreshHz = 120, oemVivid = false
     )
+
+    val FPS_CLEAN = LookPreset(
+        "fpsc", "FPS Clean", "Peak refresh and deep blacks",
+        depth = 16, warmth = 0, refreshHz = 120, oemVivid = false
+    )
+
+    val FPS_LAG = LookPreset(
+        "fpsl", "FPS + Vivid", "Peak refresh and vivid profile",
+        depth = 0, warmth = 0, refreshHz = 120, oemVivid = true
+    )
+
+    val EVERYTHING = LookPreset(
+        "all", "Everything", "Peak refresh, deep, warm, vivid",
+        depth = 28, warmth = 14, refreshHz = 120, oemVivid = true
+    )
+
+    val BUILT_IN = listOf(
+        OFF,
+        OLED_BOOST, CRUSHED, SUBTLE, DARK_ROOM,
+        NIGHT, COOL, ICE, EMBER, SEPIA, BLUE_SHIFT,
+        POP, TEAL_ORANGE, CINEMATIC, MATTE, CONTRAST_KING, MAX,
+        FPS_FOCUS, FPS_CLEAN, FPS_LAG, EVERYTHING
+    )
+
+    /**
+     * Every built-in except [OFF] must change something. Three presets shipped
+     * dead before this existed - two with all-zero fields and one written as
+     * "-0" - and nothing caught it, because a no-op preset still compiles, still
+     * renders, still shows an ON badge. verify-looks.kt asserts this.
+     */
+    fun noOpBuiltIns(): List<String> = BUILT_IN
+        .filter { it.key != "off" }
+        .filter { it.depth == 0 && it.warmth == 0 && it.refreshHz == 0 && !it.oemVivid }
+        .map { it.key }
 
     /**
      * Imported looks are appended, minus any that collide with a built-in key.
@@ -145,17 +223,6 @@ object LookPresets {
         BUILT_IN + imported.filter { imp ->
             imp.custom && BUILT_IN.none { it.key == imp.key }
         }
-
-    /**
-     * Every built-in except [OFF] must change something. Three presets shipped
-     * dead before this existed - two with all-zero fields and one written as
-     * "-0" - and nothing caught it, because a no-op preset still compiles, still
-     * renders, still shows an ON badge. verify-looks.kt asserts this.
-     */
-    fun noOpBuiltIns(): List<String> = BUILT_IN
-        .filter { it.key != "off" }
-        .filter { it.depth == 0 && it.warmth == 0 && it.refreshHz == 0 && !it.oemVivid }
-        .map { it.key }
 
     fun byKey(k: String?, imported: List<LookPreset> = emptyList()): LookPreset =
         all(imported).firstOrNull { it.key == k } ?: OFF

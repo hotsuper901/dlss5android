@@ -42,6 +42,10 @@ class ColorOverlayService : android.app.Service() {
     private var overlay: View? = null
     private var wm: WindowManager? = null
 
+    // The view is created once and re-parented on rebuild, so a rotation does
+    // not churn a fresh View through the service.
+
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -100,27 +104,90 @@ class ColorOverlayService : android.app.Service() {
 
         wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         val view = View(this).apply { setBackgroundColor(want) }
+        runCatching { wm?.addView(view, buildParams()) }
+        overlay = view
+        currentTag = want
+    }
 
-        val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE,
+    /**
+     * Fullscreen, on every screen shape we are likely to meet.
+     *
+     * Three things stop a naive MATCH_PARENT overlay from being fullscreen:
+     *
+     *  - The display cutout. FLAG_LAYOUT_IN_SCREEN does not extend into the
+     *    notch or punch-hole, so on a portrait phone the strip containing the
+     *    camera and the status bar stayed untinted - a visible band along the
+     *    top of the game. layoutInDisplayCutoutMode ALWAYS is the fix, with
+     *    SHORT_EDGES as the API 28-29 fallback.
+     *
+     *  - FLAG_LAYOUT_NO_LIMITS makes MATCH_PARENT unreliable on some OEM
+     *    builds, where the window gets laid out against the app area rather
+     *    than the physical display. So the size is taken explicitly from
+     *    currentWindowMetrics, falling back to the raw display metrics.
+     *
+     *  - Rotation and foldables change the bounds, so the params are rebuilt
+     *    on configuration change rather than left at whatever the screen was
+     *    when the service started.
+     */
+    private fun buildParams(): WindowManager.LayoutParams {
+        val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        val (w, h) = runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val b = wm.currentWindowMetrics.bounds
+                b.width() to b.height()
+            } else {
+                // getRealMetrics fills the object and returns void.
+                val d = wm.defaultDisplay
+                @Suppress("DEPRECATION")
+                val dm = android.util.DisplayMetrics().also { d.getRealMetrics(it) }
+                dm.widthPixels to dm.heightPixels
+            }
+        }.getOrElse { Pair(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT) }
+
+        val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
+
+        return WindowManager.LayoutParams(
+            w, h, type,
             // NOT_TOUCHABLE is the important one: every touch has to fall
             // through to the game underneath, otherwise the layer swallows
-            // the controls the player is aiming with.
+            // the controls the player is aiming with. NOT_FOCUSABLE stops it
+            // stealing IME focus, NOT_TOUCH_MODAL lets touches pass through
+            // outside our bounds, and the LAYOUT flags plus the cutout mode
+            // are what make the window genuinely cover the panel.
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
-        ).apply { gravity = Gravity.FILL }
+        ).apply {
+            gravity = Gravity.FILL
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                @Suppress("DEPRECATION")
+                layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
+    }
 
-        runCatching { wm?.addView(view, params) }
-        overlay = view
-        currentTag = want
+    /** Rotation, unfolding, display switch: the bounds moved, so rebuild. */
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        val v = overlay ?: return
+        runCatching { wm?.updateViewLayout(v, buildParams()) }
+            .onFailure {
+                // Some OEM builds refuse updateViewLayout across a display
+                // change; fall back to a clean re-add.
+                runCatching { wm?.removeView(v) }
+                overlay = null
+                currentTag = null
+                apply(SettingsStore.get().tintDepth.value, SettingsStore.get().tintWarmth.value)
+            }
     }
 
     private fun colorFor(depth: Int, warmth: Int): Int {
@@ -131,10 +198,16 @@ class ColorOverlayService : android.app.Service() {
         // fully transparent fullscreen window up, because an empty window is
         // still a compositing cost on the SoC.
         if (d == 0 && w == 0) return Color.TRANSPARENT
-        val alpha = (d * 2.55f).toInt().coerceIn(0, 100)
-        val r = 128 + (w * 2f).toInt().coerceIn(-60, 60)
-        val b = 128 - (w * 2f).toInt().coerceIn(-60, 60)
-        return Color.argb(alpha, r.coerceIn(0, 255), 128, b.coerceIn(0, 255))
+        // Alpha used to come from depth alone, so a warmth-only setting had
+        // alpha 0 and tinted nothing at all - the warmth slider looked dead
+        // until you also dragged depth. Warmth now contributes its own floor.
+        val fromDepth = d * 2.55f
+        val fromWarmth = kotlin.math.abs(w) * 1.6f
+        val alpha = kotlin.math.max(fromDepth, fromWarmth).toInt().coerceIn(0, 110)
+        val shift = (w * 2f).toInt().coerceIn(-60, 60)
+        val r = (128 + shift).coerceIn(0, 255)
+        val b = (128 - shift).coerceIn(0, 255)
+        return Color.argb(alpha, r, 128, b)
     }
 
     private var currentTag: Int? = null
