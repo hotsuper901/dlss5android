@@ -40,6 +40,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.msj.gfx.core.ColorOverlayService
+import com.msj.gfx.core.DisplayProfile
 import com.msj.gfx.core.DisplayController
 import com.msj.gfx.core.LookPreset
 import com.msj.gfx.core.LookPresets
@@ -84,6 +85,8 @@ fun MsjRoot(
     val tintWarmth by settings.tintWarmth.collectAsState()
     val look by settings.look.collectAsState()
     val importedLooks by settings.importedLooks.collectAsState()
+    val panelIsOled by settings.panelIsOled.collectAsState()
+    val brightnessBoost by settings.brightnessBoost.collectAsState()
     val vm = remember { BoostViewModel() }
     val perf by vm.perf.collectAsState()
     val boosting by vm.boosting.collectAsState()
@@ -157,7 +160,11 @@ fun MsjRoot(
                         settings.setTintDepth(d)
                         settings.setTintWarmth(w)
                     },
-                    onImported = settings::setImportedLooks
+                    onImported = settings::setImportedLooks,
+                    panelIsOled = panelIsOled,
+                    brightnessBoost = brightnessBoost,
+                    onPanel = settings::setPanelIsOled,
+                    onBrightness = settings::setBrightnessBoost
                 )
                 Tab.HUD -> HudTab(
                     overlayOn = overlayOn, overlayGranted = overlayGranted,
@@ -895,7 +902,11 @@ private fun EnhanceTab(
     imported: List<LookPreset>,
     onLook: (LookPreset) -> Unit,
     onDepthForLook: (Int, Int) -> Unit,
-    onImported: (List<LookPreset>) -> Unit
+    onImported: (List<LookPreset>) -> Unit,
+    panelIsOled: Boolean?,
+    brightnessBoost: Int,
+    onPanel: (Boolean?) -> Unit,
+    onBrightness: (Int) -> Unit
 ) {
     val ctx = LocalContext.current
     var note by remember { mutableStateOf("") }
@@ -1036,7 +1047,61 @@ private fun EnhanceTab(
             fontSize = 10.sp, color = Muted, lineHeight = 15.sp
         )
 
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(20.dp))
+        SectionLabel("FIT TO THIS SCREEN")
+        val panel = remember(panelIsOled) {
+            DisplayProfile.read(ctx, panelIsOled)
+        }
+        Text(
+            panel.describe(),
+            fontSize = 12.sp, color = NeonCyan, fontWeight = FontWeight.Black
+        )
+        Text(
+            "Looks are rescaled for this panel on the way in, so a depth that reads " +
+                "as deep blacks on OLED does not turn to mud on an LCD. Refresh is " +
+                "requested against your real ceiling, not a fixed 120.",
+            fontSize = 10.sp, color = Muted, lineHeight = 15.sp
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            listOf<Pair<String, Boolean?>>(
+                "AUTO" to null, "OLED" to true, "LCD" to false
+            ).forEach { (label, v) ->
+                val sel = panelIsOled == v
+                TextButton(
+                    onClick = { onPanel(v) },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(
+                        label,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Black,
+                        color = if (sel) NeonCyan else Muted
+                    )
+                }
+            }
+        }
+        Text(
+            "Android has no API that reports panel type, so AUTO is a guess. " +
+                "One tap here if it guessed wrong.",
+            fontSize = 10.sp, color = Muted, lineHeight = 15.sp
+        )
+
+        Spacer(Modifier.height(18.dp))
+        SectionLabel("BRIGHTNESS HEADROOM")
+        SliderRow("Boost", brightnessBoost, 0, 100, "%", onBrightness)
+        Text(
+            "The one control here that puts more signal above the panel's noise " +
+                "floor, so a dim game actually looks brighter rather than tinted. " +
+                "Needs Write settings, and some devices clamp it - the display HAL " +
+                "has the final say. Handed back to automatic when you leave the game.",
+            fontSize = 10.sp, color = Muted, lineHeight = 15.sp
+        )
+
+        Spacer(Modifier.height(18.dp))
         var oemSupported by remember { mutableStateOf<Boolean?>(null) }
         var oemOn by remember { mutableStateOf(false) }
         TextButton(

@@ -301,6 +301,48 @@ object DisplayController {
      * and callers should treat that as "not supported here" rather than a
      * failure. Writes are best-effort because the value domain differs by OEM.
      */
+    const val K_SCREEN_BRIGHTNESS = "screen_brightness"
+    const val K_SCREEN_BRIGHTNESS_MODE = "screen_brightness_mode"
+
+    /**
+     * Push brightness past the system's normal cap while gaming.
+     *
+     * This is the single biggest real lever on "the game looks washed out",
+     * and it is worth being precise about why. A dim game does not look better
+     * because we deepened its blacks - it looks better because the panel is
+     * driven harder, so more of the signal is above the display's noise floor.
+     * That is genuinely more information reaching your eye, which is more than
+     * a tint layer can ever do.
+     *
+     * The OS caps automatic brightness well below the panel's capability, and
+     * some OEMs allow a "high brightness" mode above it. Writing straight to
+     * screen_brightness is the only unrooted route and it is device-dependent:
+     * the display HAL clamps anything it considers out of range, so this
+     * returns whatever the system actually accepted rather than pretending.
+     */
+    fun setBrightnessHeadroom(boost: Int): Boolean = runCatching {
+        if (!Settings.System.canWrite(Ctx.get())) return false
+        val res = Ctx.get().contentResolver
+        val b = boost.coerceIn(0, 100)
+        if (b == 0) return restoreBrightness()
+        // Manual mode, otherwise the ambient sensor overwrites us within a
+        // second or two and the boost silently evaporates.
+        Settings.System.putInt(res, K_SCREEN_BRIGHTNESS_MODE, 0)
+        val current = Settings.System.getInt(res, K_SCREEN_BRIGHTNESS, 128)
+        val target = (current + (b * 1.5f)).toInt().coerceIn(1, 255)
+        Settings.System.putInt(res, K_SCREEN_BRIGHTNESS, target)
+        true
+    }.getOrDefault(false)
+
+    /** Hand brightness back to automatic on game exit. */
+    fun restoreBrightness(): Boolean = runCatching {
+        if (!Settings.System.canWrite(Ctx.get())) return false
+        Settings.System.putInt(
+            Ctx.get().contentResolver, K_SCREEN_BRIGHTNESS_MODE, -1
+        )
+        true
+    }.getOrDefault(false)
+
     fun setOemVividMode(vivid: Boolean): Boolean = runCatching {
         val res = Ctx.get().contentResolver
         if (!Settings.System.canWrite(Ctx.get())) return false

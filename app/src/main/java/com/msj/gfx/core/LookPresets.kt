@@ -136,9 +136,21 @@ object LookPresets {
 
     // --- combinations -------------------------------------------------------
 
+    /**
+     * The most "vibrant" look the mechanism can honestly be.
+     *
+     * Anime art is flat-shaded and already high-chroma, so the useful move is
+     * to stop the darks from muddying it and let the OEM vivid profile widen
+     * the gamut underneath. Depth stays low deliberately: pushing it here
+     * crushes the shadow lines that make cel shading read as cel shading.
+     *
+     * Worth being clear about the ceiling - a uniform tint cannot add detail
+     * or make the art sharper. What this does is stop the panel fighting the
+     * artwork, which is the part that was actually on the table.
+     */
     val POP = LookPreset(
-        "pop", "Anime Pop", "Deeper blacks, strong tint",
-        depth = 6, warmth = 10, refreshHz = 0, oemVivid = true
+        "pop", "Anime Pop", "Flat, wide gamut, clean shadows",
+        depth = 6, warmth = 8, refreshHz = 0, oemVivid = true
     )
 
     val TEAL_ORANGE = LookPreset(

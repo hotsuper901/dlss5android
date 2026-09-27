@@ -173,29 +173,41 @@ class GameWatcher(
 
             val ctx = Ctx.get()
 
+            // Rescale for the panel before anything is applied. A depth that
+            // looks right on OLED is mud on an LCD, so this is the difference
+            // between a look that suits the phone and a slider someone else set.
+            val panel = DisplayProfile.read(ctx, store.panelIsOled.value)
+            val fitted = look.adaptTo(panel)
+
+            // Brightness headroom first: it is the one control that genuinely
+            // puts more signal above the panel's noise floor.
+            if (store.brightnessBoost.value > 0) {
+                runCatching { DisplayController.setBrightnessHeadroom(store.brightnessBoost.value) }
+            }
+
             // Overlay tint: depth + warmth over the game's own frame.
-            if (look.needsOverlay) {
+            if (fitted.needsOverlay) {
                 runCatching {
                     if (android.provider.Settings.canDrawOverlays(ctx)) {
-                        ColorOverlayService.start(ctx, look.depth, look.warmth)
+                        ColorOverlayService.start(ctx, fitted.depth, fitted.warmth)
                     }
                 }
             }
             // Refresh target, if this look asks for one and the panel supports it.
-            if (look.refreshHz > 0) {
+            if (fitted.refreshHz > 0) {
                 runCatching {
                     val max = DisplayController.maxRefreshHz()
-                    if (max != null && look.refreshHz <= max) {
-                        DisplayController.setPeakRefresh(look.refreshHz.toFloat())
+                    if (max != null && fitted.refreshHz <= max) {
+                        DisplayController.setPeakRefresh(fitted.refreshHz.toFloat())
                     }
                 }
             }
             // OEM colour profile: hardware, downstream of the game, so this is
             // a genuine colour re-map rather than a tint.
-            if (look.oemVivid) {
+            if (fitted.oemVivid) {
                 runCatching { DisplayController.setOemVividMode(true) }
             }
-            appliedLook = look
+            appliedLook = fitted
         }
     }
 
@@ -207,6 +219,9 @@ class GameWatcher(
         runCatching { ColorOverlayService.stop(Ctx.get()) }
         if (was.refreshHz > 0) runCatching { DisplayController.releasePeakRefresh() }
         if (was.oemVivid) runCatching { DisplayController.setOemVividMode(false) }
+        if (SettingsStore.get().brightnessBoost.value > 0) {
+            runCatching { DisplayController.restoreBrightness() }
+        }
     }
 
     /** Hand the display back and stop trimming, so we do not drain a battery. */

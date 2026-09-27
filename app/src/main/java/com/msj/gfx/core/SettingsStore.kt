@@ -68,6 +68,34 @@ class SettingsStore(context: Context) {
     private val _tintWarmth = MutableStateFlow(prefs.getInt(K_TINT_WARMTH, 0))
     val tintWarmth = _tintWarmth
 
+    /**
+     * User override for panel type. null means "use the guess".
+     *
+     * Android exposes no API for "is this an OLED", so the guess in
+     * DisplayProfile is wrong often enough that the UI offers a toggle. Being
+     * wrong halves or doubles a tint, and the user can see which way it went.
+     */
+    private val _panelIsOled = MutableStateFlow(
+        when (prefs.getString(K_PANEL, "auto")) {
+            "oled" -> true
+            "lcd" -> false
+            else -> null
+        }
+    )
+    val panelIsOled = _panelIsOled
+
+    /** Brightness headroom, 0..100. Applied on game entry, released on exit. */
+    private val _brightnessBoost = MutableStateFlow(prefs.getInt(K_BRIGHT_BOOST, 0))
+    val brightnessBoost = _brightnessBoost
+
+    fun setPanelIsOled(v: Boolean?) = prefs.edit()
+        .putString(K_PANEL, when (v) { true -> "oled"; false -> "lcd"; null -> "auto" })
+        .apply().also { _panelIsOled.value = v }
+
+    fun setBrightnessBoost(v: Int) = prefs.edit()
+        .putInt(K_BRIGHT_BOOST, v.coerceIn(0, 100)).apply()
+        .also { _brightnessBoost.value = v.coerceIn(0, 100) }
+
     /** Which look auto-applies when a tracked game hits the foreground. */
     private val _look = MutableStateFlow(
         LookPresets.byKey(prefs.getString(K_LOOK, "off"))
@@ -153,6 +181,8 @@ class SettingsStore(context: Context) {
         private const val K_TINT_WARMTH = "tint_warmth"
         private const val K_LOOK = "look_key"
         private const val K_LOOKS_CUSTOM = "looks_custom"
+        private const val K_PANEL = "panel_type"
+        private const val K_BRIGHT_BOOST = "brightness_boost"
         @Volatile private var instance: SettingsStore? = null
 
         fun get(): SettingsStore = instance ?: synchronized(this) {
