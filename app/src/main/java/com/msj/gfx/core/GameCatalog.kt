@@ -134,7 +134,66 @@ object GameCatalog {
         return PREFIXES.firstOrNull { pkg.startsWith(it.first) }?.second
     }
 
-    fun installed(): List<Game> = ALL.filter { isInstalled(it.packageName) }
+    /**
+     * Every launchable app on the device, as (packageName, label).
+     *
+     * This is the ground truth. The ALL list above is a guess, and a guess is
+     * exactly why an installed Free Fire can show as "not installed" - regional
+     * and repackaged builds ship under package names nobody can enumerate in
+     * advance. The manifest declares the MAIN/LAUNCHER intent query that makes
+     * this list readable on API 30+.
+     *
+     * Binder call. Must be called off the main thread.
+     */
+    fun launchableApps(): List<Installed> = runCatching {
+        val pm = Ctx.get().packageManager
+        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val resolved = if (Build.VERSION.SDK_INT >= 33) {
+            pm.queryIntentActivities(intent, PackageManager.ResolveInfoFlags.of(0L))
+        } else {
+            @Suppress("DEPRECATION")
+            pm.queryIntentActivities(intent, 0)
+        }
+        resolved.asSequence()
+            .mapNotNull { ri ->
+                val pkg = ri.activityInfo?.packageName ?: return@mapNotNull null
+                val label = runCatching { ri.loadLabel(pm).toString() }
+                    .getOrDefault(pkg)
+                Installed(pkg, label)
+            }
+            .distinctBy { it.packageName }
+            .toList()
+    }.getOrDefault(emptyList())
+
+    data class Installed(val packageName: String, val label: String)
+
+    /**
+     * Supported titles that are actually present. Checks the launchable list
+     * first and falls back to a direct lookup, because a title can be installed
+     * without exposing a launcher activity (some OEM builds do this).
+     */
+    fun installed(): List<Game> {
+        val launchable = launchableApps().map { it.packageName }.toSet()
+        return ALL.filter { it.packageName in launchable || isInstalled(it.packageName) }
+    }
+
+    /**
+     * Every launchable package that looks like a supported or unrecognised
+     * game, so an unknown build can be identified by reading its real package
+     * name off the diagnostics screen instead of guessing at it.
+     */
+    fun gameLikePackages(): List<Installed> {
+        val needles = listOf(
+            "garena", "freefire", "free.fire", "moonton", "mobilelegends", "mlbb",
+            "tencent", "pubg", "ig", "krmobile", "rekoo", "vng", "activision",
+            "callofduty", "criticalops", "supercell", "clash", "riot", "valorant",
+            "miHoYo", "genshin", "honorofkings", "sgame", "荒野", "free fire"
+        )
+        return launchableApps().filter { app ->
+            val hay = "${app.packageName} ${app.label}".lowercase()
+            needles.any { hay.contains(it.lowercase()) }
+        }
+    }
 
     fun isInstalled(pkg: String): Boolean = runCatching {
         if (Build.VERSION.SDK_INT >= 33) {

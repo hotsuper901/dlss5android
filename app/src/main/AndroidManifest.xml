@@ -28,6 +28,15 @@
         <package android:name="com.tencent.tmgp.sgame" />
         <package android:name="com.activision.callofduty.shooter" />
         <package android:name="ca.criticalops.thecriticalop" />
+        <package android:name="com.garena.game.kgvn.ow" />
+
+        <!-- Also query the launcher intent. A hardcoded package list is a
+             guess: repackaged and regional builds ship under names we cannot
+             enumerate in advance, and this makes them visible. -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
     </queries>
 
     <application

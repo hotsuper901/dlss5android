@@ -39,6 +39,18 @@ class BoostViewModel : ViewModel() {
     private val _usageGranted = MutableStateFlow(false)
     val usageGranted = _usageGranted.asStateFlow()
 
+    private val _installed = MutableStateFlow<List<GameCatalog.Game>>(emptyList())
+    val installed = _installed.asStateFlow()
+
+    private val _unmatched = MutableStateFlow<List<GameCatalog.Installed>>(emptyList())
+    val unmatched = _unmatched.asStateFlow()
+
+    private val _scanning = MutableStateFlow(false)
+    val scanning = _scanning.asStateFlow()
+
+    private val _launchableCount = MutableStateFlow(0)
+    val launchableCount = _launchableCount.asStateFlow()
+
     private var sampleJob: Job? = null
     private var boostJob: Job? = null
     private var permJob: Job? = null
@@ -55,6 +67,33 @@ class BoostViewModel : ViewModel() {
         }
         refreshPermissions()
         startWatcher()
+        rescanInstalled()
+    }
+
+    /**
+     * Re-reads the installed titles. Runs on Dispatchers.Default because
+     * queryIntentActivities is a binder call, and the previous version of this
+     * did it inside a composable via remember{}, which both blocked the UI
+     * thread and latched the first (possibly empty) answer forever.
+     */
+    fun rescanInstalled() {
+        if (_scanning.value) return
+        _scanning.value = true
+        viewModelScope.launch(Dispatchers.Default) {
+            try {
+                val all = GameCatalog.launchableApps()
+                _launchableCount.value = all.size
+                _installed.value = GameCatalog.installed()
+                // Anything game-shaped that is not in the catalog. This is how
+                // an unrecognised build gets identified - by its real package
+                // name, read off this list, instead of a guess.
+                val known = _installed.value.map { it.packageName }.toSet()
+                _unmatched.value = GameCatalog.gameLikePackages()
+                    .filterNot { it.packageName in known }
+            } finally {
+                _scanning.value = false
+            }
+        }
     }
 
     private fun startWatcher() {

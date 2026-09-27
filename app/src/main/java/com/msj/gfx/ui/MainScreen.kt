@@ -21,12 +21,14 @@ import androidx.compose.material.icons.filled.Thermostat
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -112,7 +114,7 @@ fun MsjRoot(
                     onPreset = settings::setPreset,
                     onToggleAutoTrim = settings::setAutoTrim
                 )
-                Tab.GAMES -> GamesTab(onOpenGame)
+                Tab.GAMES -> GamesTab(vm, onOpenGame)
                 Tab.HUD -> HudTab(
                     overlayOn = overlayOn, overlayGranted = overlayGranted,
                     onRequestOverlay = onRequestOverlay,
@@ -520,17 +522,49 @@ private fun Notice(text: String, tint: Color) {
 /* ------------------------------ GAMES ------------------------------ */
 
 @Composable
-private fun GamesTab(onOpenGame: (String) -> Unit) {
-    val games = remember { GameCatalog.installed() }
+private fun GamesTab(vm: BoostViewModel, onOpenGame: (String) -> Unit) {
+    val installed by vm.installed.collectAsState()
+    val unmatched by vm.unmatched.collectAsState()
+    val scanning by vm.scanning.collectAsState()
+    val launchable by vm.launchableCount.collectAsState()
+
+    // Rescan whenever the tab is shown. A remember{} here latched the first
+    // answer, so a title installed after the app launched never appeared.
+    LaunchedEffect(Unit) { vm.rescanInstalled() }
+
     Column(Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
         Spacer(Modifier.height(16.dp))
-        Text("SUPPORTED GAMES", fontSize = 12.sp, color = Muted, fontWeight = FontWeight.Bold)
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "SUPPORTED GAMES",
+                fontSize = 12.sp, color = Muted, fontWeight = FontWeight.Bold
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "$launchable launchable apps",
+                    fontSize = 10.sp, color = Muted
+                )
+                Spacer(Modifier.width(10.dp))
+                TextButton(onClick = { vm.rescanInstalled() }, enabled = !scanning) {
+                    Text(
+                        if (scanning) "SCANNING" else "RESCAN",
+                        color = if (scanning) Muted else NeonCyan,
+                        fontSize = 11.sp, fontWeight = FontWeight.Black
+                    )
+                }
+            }
+        }
         Spacer(Modifier.height(10.dp))
 
-        if (games.isEmpty()) {
+        if (!scanning && installed.isEmpty()) {
             Notice(
-                "No supported title detected. Install Free Fire, Free Fire MAX or PUBG Mobile " +
-                    "and reopen this screen - we detect them automatically.",
+                "None of the supported package names matched. $launchable launchable apps " +
+                    "were visible to this app - see the unrecognised list below for what " +
+                    "your Free Fire and Mobile Legends actually report as.",
                 WarnYellow
             )
         }
@@ -539,11 +573,45 @@ private fun GamesTab(onOpenGame: (String) -> Unit) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
             contentPadding = PaddingValues(bottom = 24.dp)
         ) {
-            items(games, key = { it.packageName }) { g ->
-                GameCard(g, onOpenGame)
+            items(installed, key = { it.packageName }) { g ->
+                GameCard(g, onOpenGame, installed = true)
             }
-            items(GameCatalog.ALL.filter { it !in games }) { g ->
+            items(
+                GameCatalog.ALL.filter { g -> installed.none { it.packageName == g.packageName } },
+                key = { "missing-${it.packageName}" }
+            ) { g ->
                 GameCard(g, onOpenGame, installed = false)
+            }
+
+            if (unmatched.isNotEmpty()) {
+                item { SectionLabel("UNRECOGNISED GAME PACKAGES") }
+                item {
+                    Text(
+                        "Found on this device but not in the catalog. If one of these is your " +
+                            "Free Fire or Mobile Legends, that package name is the real one.",
+                        fontSize = 11.sp, color = Muted, lineHeight = 17.sp
+                    )
+                }
+                items(unmatched, key = { "unmatched-${it.packageName}" }) { app ->
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Panel)
+                            .padding(12.dp)
+                    ) {
+                        Text(
+                            app.label,
+                            fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Ink
+                        )
+                        Text(
+                            app.packageName,
+                            fontSize = 10.sp,
+                            color = NeonCyan,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
             }
         }
     }
