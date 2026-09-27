@@ -161,8 +161,12 @@ jobs:
 
       - name: Build release APK
         run: |
+          # Absolute path: the signing config resolves storeFile relative to
+          # the app module directory, so a bare filename looks for
+          # app/ci-release.keystore and fails with "not found for signing
+          # config 'release'".
           ./gradlew assembleRelease --stacktrace --no-daemon \
-            -PMSJ_STORE_FILE=ci-release.keystore \
+            -PMSJ_STORE_FILE="$PWD/ci-release.keystore" \
             -PMSJ_STORE_PASSWORD="$KEYSTORE_PASS" \
             -PMSJ_KEY_ALIAS=msj \
             -PMSJ_KEY_PASSWORD="$KEYSTORE_PASS"
