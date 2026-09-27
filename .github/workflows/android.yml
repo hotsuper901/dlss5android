@@ -136,8 +136,42 @@ jobs:
           gradle wrapper --gradle-version 8.7 --distribution-type bin
           chmod +x ./gradlew
 
+      - name: Generate a signing keystore
+        # The release build type falls back to the debug signing config when no
+        # MSJ_STORE_FILE is supplied, and that fallback was producing an
+        # *unsigned* APK rather than a debug-signed one - CI caught it via
+        # scripts/verify-apk-signature.py. So sign it properly and explicitly.
+        #
+        # This keystore is generated per run. That means each build is signed by
+        # a different key, so a new APK will not install over an old one
+        # (INSTALL_FAILED_UPDATE_INCOMPATIBLE). Set MSJ_KEYSTORE_B64 as a repo
+        # secret to ship updates from a stable key.
+        shell: bash
+        run: |
+          set -euo pipefail
+          keytool -genkeypair -v \
+            -keystore ci-release.keystore \
+            -storepass "$KEYSTORE_PASS" -keypass "$KEYSTORE_PASS" \
+            -alias msj -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=MSJ GFX, OU=Release, O=MSJ GFX, L=, ST=, C=US" \
+            > /dev/null 2>&1
+          ls -la ci-release.keystore
+        env:
+          KEYSTORE_PASS: ${{ secrets.MSJ_KEYSTORE_PASS || 'msj-gfx-ci' }}
+
       - name: Build release APK
-        run: ./gradlew assembleRelease --stacktrace --no-daemon
+        run: |
+          ./gradlew assembleRelease --stacktrace --no-daemon \
+            -PMSJ_STORE_FILE=ci-release.keystore \
+            -PMSJ_STORE_PASSWORD="$KEYSTORE_PASS" \
+            -PMSJ_KEY_ALIAS=msj \
+            -PMSJ_KEY_PASSWORD="$KEYSTORE_PASS"
+        env:
+          KEYSTORE_PASS: ${{ secrets.MSJ_KEYSTORE_PASS || 'msj-gfx-ci' }}
+
+      - name: Inspect build output
+        shell: bash
+        run: ls -la app/build/outputs/apk/release/ app/build/outputs/apk/named/ || true
 
       - name: Name the artifact
         shell: bash
@@ -148,11 +182,15 @@ jobs:
           SRC="app/build/outputs/apk/named/M.S.J GFX.apk"
           test -f "$SRC" || SRC=$(ls app/build/outputs/apk/release/*.apk | grep -v unsigned | head -1)
           mkdir -p dist
-          # Refuse to ship an unsigned APK. v1 META-INF signature files are
-          # absent under v2/v3-only signing, so the check looks for the APK
-          # Signing Block, which is where v2+ signatures actually live.
+          ls -la app/build/outputs/apk/release/ app/build/outputs/apk/named/ || true
+          # Refuse to publish an APK that cannot be verified. apksigner is the
+          # canonical tool and is already on the runner via build-tools, so
+          # there is no reason to reimplement zip parsing here - an earlier
+          # hand-rolled version of this check reported a correctly signed APK
+          # as unsigned and would have blocked every release.
+          export ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
           python3 scripts/verify-apk-signature.py "$SRC"
-          ls -la app/build/outputs/apk/release/ dist/
           cp "$SRC" "dist/M.S.J GFX.apk"
           ls -la dist/
           sha256sum "dist/M.S.J GFX.apk" | tee dist/SHA256SUMS.txt
