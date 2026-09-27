@@ -1052,11 +1052,11 @@ private fun EnhanceTab(
         }
 
         Spacer(Modifier.height(8.dp))
-        SliderRow("Denoise", denoise, 0, 100, "%", { denoise = it })
-        SliderRow("Sharpen", sharpen, 0, 100, "%", { sharpen = it })
-        SliderRow("Saturation", saturation, 0, 250, "%", { saturation = it })
-        SliderRow("Contrast", contrast, 50, 160, "%", { contrast = it })
-        SliderRow("Warmth", warmthIn, -50, 50, "", { warmthIn = it })
+        SliderRowF("Denoise", denoise, 0f, 100f, "%", { denoise = it })
+        SliderRowF("Sharpen", sharpen, 0f, 100f, "%", { sharpen = it })
+        SliderRowF("Saturation", saturation, 0f, 250f, "%", { saturation = it })
+        SliderRowF("Contrast", contrast, 50f, 160f, "%", { contrast = it })
+        SliderRowF("Warmth", warmthIn, -50f, 50f, "", { warmthIn = it })
 
         Spacer(Modifier.height(8.dp))
         SectionLabel("SCALE")
@@ -1159,6 +1159,40 @@ private fun EnhanceTab(
         }
 
         Spacer(Modifier.height(24.dp))
+    }
+}
+
+/** Float slider row for the image-pipeline parameters, whole-number readout. */
+@Composable
+private fun SliderRowF(
+    label: String,
+    value: Float,
+    min: Float,
+    max: Float,
+    suffix: String,
+    onChange: (Float) -> Unit
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            label,
+            fontSize = 12.sp, color = Ink, fontWeight = FontWeight.Bold,
+            modifier = Modifier.width(96.dp)
+        )
+        Slider(
+            value = value.coerceIn(min, max),
+            onValueChange = onChange,
+            valueRange = min..max,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            "${value.roundToInt()}$suffix",
+            fontSize = 11.sp, color = NeonCyan, fontFamily = FontFamily.Monospace,
+            modifier = Modifier.width(54.dp),
+            textAlign = TextAlign.End
+        )
     }
 }
 
