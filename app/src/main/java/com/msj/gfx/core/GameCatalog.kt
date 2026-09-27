@@ -53,7 +53,7 @@ object GameCatalog {
     )
 
     val MLBB = g(
-        "com.moonton.mobilelegends", "Mobile Legends: Bang Bang", 0xFF3B82F6, 1200,
+        "com.mobile.legends", "Mobile Legends: Bang Bang", 0xFF3B82F6, 1200,
         "Graphics > High, and turn OFF 'High Frame Rate' unless your device holds 60",
         "Interface > set the HUD to minimal so less UI is composited every frame",
         "Turn off 'Show Battle Stats' and 'Show Rank' - extra text is extra draw calls",
@@ -61,7 +61,7 @@ object GameCatalog {
     )
 
     val HONOR_OF_KINGS = g(
-        "com.tencent.tmgp.sgame", "Honor of Kings", 0xFFF59E0B, 1400,
+        "com.levelinfinite.sgameGlobal", "Honor of Kings", 0xFFF59E0B, 1400,
         "Graphics > High with 'Smooth' detail - the combination most devices actually sustain",
         "Turn off 'Auto Reconnect reminders' and the floating battle shortcuts",
         "Close the camera and mic permissions you do not use, they wake background services"
@@ -75,7 +75,7 @@ object GameCatalog {
     )
 
     val CRITICAL_OPS = g(
-        "ca.criticalops.thecriticalop", "Critical Ops", 0xFF14B8A6, 900,
+        "com.criticalforceentertainment.criticalops", "Critical Ops", 0xFF14B8A6, 900,
         "Graphics > Ultra, this one is not demanding and holds 60 on midrange hardware",
         "Lower the FOV slider a touch - it is a direct multiplier on fragment cost"
     )
@@ -95,7 +95,7 @@ object GameCatalog {
     )
 
     val PUBG_LITE = g(
-        "com.tencent.ig.lite", "PUBG Mobile Lite", 0xFF84CC16, 700,
+        "com.tencent.iglite", "PUBG Mobile Lite", 0xFF84CC16, 700,
         "This build already targets low-end devices, leave the defaults alone",
         "Lower the resolution scale before you lower quality - it costs less visually"
     )
@@ -125,6 +125,7 @@ object GameCatalog {
             "com.garena.game.kid" to FREE_FIRE_MAX,
             "com.garena.game.IDungeon" to FREE_FIRE,
             "com.tencent.ig" to PUBG_MOBILE,
+            "com.tencent.iglite" to PUBG_LITE,
             "com.tencent.ig.lite" to PUBG_LITE,
             "com.pubg.imobile" to BGMI,
             "com.pubg.newstate" to NEW_STATE,
@@ -132,26 +133,34 @@ object GameCatalog {
             "com.vng.pubgmobile" to PUBG_MOBILE,
             "com.rekoo.pubgm" to PUBG_MOBILE,
             "com.tencent.tmgp.pubgmhd" to PUBG_MOBILE,
+            "com.mobile.legends" to MLBB,
+            // The old Moonton ids, kept so regional installs still match.
+            // Note the historic single-g typo in "mobilelegens".
+            "com.moonton.mobilelegens" to MLBB,
             "com.moonton.mobilelegends" to MLBB,
             "com.moonton.mobilelegends.hk" to MLBB,
             "com.moonton.mobilelegends.tw" to MLBB,
             "com.moonton.mobilelegends.gb" to MLBB,
+            // sgameGlobal is the international build; tmgp.sgame is the
+            // China-only one and is not on Play outside CN.
+            "com.levelinfinite.sgameGlobal" to HONOR_OF_KINGS,
             "com.tencent.tmgp.sgame" to HONOR_OF_KINGS,
             "com.tencent.tmgp.km" to HONOR_OF_KINGS,
-            "com.activision.callofduty.shooter" to COD_MOBILE
+            "com.activision.callofduty.shooter" to COD_MOBILE,
+            "com.criticalforceentertainment.criticalops" to CRITICAL_OPS,
+            "ca.criticalops.thecriticalop" to CRITICAL_OPS
         ).forEach { (pkg, game) -> put(pkg, game) }
     }
 
     /** Prefix entries cover suffixed regional builds, e.g. com.moonton.mobilelegends.bh. */
     private val PREFIXES: List<Pair<String, Game>> = listOf(
-        "com.dts.freefireth" to FREE_FIRE,
-        "com.dts.freefiremax" to FREE_FIRE_MAX,
-        "com.dts" to FREE_FIRE,
-        "com.garena.game.kgvn" to LIEN_QUAN,
-        "com.garena.game.kid" to FREE_FIRE_MAX,
-        // Order matters: firstOrNull wins, so the specific packages have to
-        // come before the broad com.pubg catch-all or they all collapse into
-        // one title.
+        // Order matters: firstOrNull wins.
+        //
+        // "com.tencent.iglite" starts with "com.tencent.ig", so PUBG MOBILE LITE
+        // has to be listed before PUBG MOBILE or it silently resolves to the
+        // wrong game. Same reason com.pubg.imobile and com.pubg.newstate sit
+        // ahead of the com.pubg catch-all.
+        "com.tencent.iglite" to PUBG_LITE,
         "com.tencent.ig.lite" to PUBG_LITE,
         "com.pubg.imobile" to BGMI,
         "com.pubg.newstate" to NEW_STATE,
@@ -160,10 +169,18 @@ object GameCatalog {
         "com.vng.pubgmobile" to PUBG_MOBILE,
         "com.rekoo.pubgm" to PUBG_MOBILE,
         "com.tencent.tmgp.pubgm" to PUBG_MOBILE,
-        "com.moonton.mobilelegends" to MLBB,
+        "com.mobile.legends" to MLBB,
+        "com.moonton.mobilelegens" to MLBB,
+        "com.levelinfinite.sgameGlobal" to HONOR_OF_KINGS,
         "com.tencent.tmgp.sgame" to HONOR_OF_KINGS,
         "com.activision.callofduty.shooter" to COD_MOBILE,
-        "ca.criticalops.thecriticalop" to CRITICAL_OPS
+        "com.criticalforceentertainment.criticalops" to CRITICAL_OPS,
+        "ca.criticalops" to CRITICAL_OPS,
+        "com.dts.freefireth" to FREE_FIRE,
+        "com.dts.freefiremax" to FREE_FIRE_MAX,
+        "com.dts" to FREE_FIRE,
+        "com.garena.game.kgvn" to LIEN_QUAN,
+        "com.garena.game.kid" to FREE_FIRE_MAX
     )
 
     /**
@@ -261,6 +278,7 @@ object GameCatalog {
         "garena", "freefire", "free fire", "free_fire", "kgvn", "kid",
         "com.dts", "dts.freefire",
         "moonton", "mobilelegends", "mobile legends", "mlbb", "mobile.legends",
+        "levelinfinite", "sgameglobal", "criticalforce", "critical ops",
         "tencent", "pubg", "krmobile", "rekoo", "pubgm", "tmgp.sgame",
         "activision", "callofduty", "call of duty", "criticalops",
         "supercell", "clash", "riot", "valorant", "mihoyo", "genshin",
