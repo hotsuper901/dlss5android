@@ -150,8 +150,10 @@ object MemoryTools {
     }
 
     /** The game currently on screen, or null. Null is normal and not an error. */
-    fun foregroundGame(): GameCatalog.Game? =
-        GameCatalog.match(foregroundPackage() ?: return null)
+    fun foregroundGame(): GameCatalog.Game? {
+        val pkg = foregroundPackage() ?: return null
+        return GameCatalog.match(pkg)
+    }
 
     /**
      * Whether a supported game is running, foreground or not. Falls back to
@@ -159,10 +161,10 @@ object MemoryTools {
      * other apps, so it is never the deciding signal.
      */
     fun isAnyGameRunning(): Boolean {
-        foregroundGame()?.let { return true }
-        // Usage access not granted: we genuinely cannot know. Say so rather
-        // than pretending a one-entry process list is an answer.
-        return false
+        // Usage access not granted means we genuinely cannot know. Returning
+        // false here rather than faking a result is deliberate: the caller
+        // surfaces UNKNOWN_NO_PERMISSION instead of silently reporting idle.
+        return foregroundGame() != null
     }
 
     fun hasUsageAccess(): Boolean {
