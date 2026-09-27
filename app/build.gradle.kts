@@ -88,3 +88,30 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
+
+/**
+ * Writes the release APK out again under its product name.
+ *
+ * assembleRelease produces app-release.apk, and everything downstream of that
+ * wants a different name: the GitHub release asset, the download, and the file
+ * a user drops on a phone. Doing it here rather than in a shell step means a
+ * local `./gradlew assembleRelease` leaves the same artefact in
+ * app/build/outputs/apk/release/, so the name is not something that only
+ * exists in CI.
+ *
+ * The name contains a space, which GitHub's release-asset upload rewrites to a
+ * dot - assets come back as "M.S.J.GFX.apk" no matter what is named here. The
+ * file inside the uploaded artifact keeps the exact name, and the copy on disk
+ * keeps it too.
+ */
+val namedReleaseApk by tasks.registering(Copy::class) {
+    group = "distribution"
+    description = "Copies the release APK out as M.S.J GFX.apk"
+    from(layout.buildDirectory.dir("outputs/apk/release")) {
+        include("*.apk")
+        rename { "M.S.J GFX.apk" }
+    }
+    into(layout.buildDirectory.dir("outputs/apk/named"))
+}
+
+tasks.named("assembleRelease") { finalizedBy(namedReleaseApk) }

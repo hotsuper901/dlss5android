@@ -143,10 +143,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          SRC=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          # The gradle task already emitted the exact product name; copy from
+          # there so the artifact payload and a local build agree.
+          SRC="app/build/outputs/apk/named/M.S.J GFX.apk"
+          test -f "$SRC" || SRC=$(ls app/build/outputs/apk/release/*.apk | head -1)
           mkdir -p dist
-          # Spaces and dots in the asset name are preserved on the release;
-          # artifact upload would mangle them to underscores.
           cp "$SRC" "dist/M.S.J GFX.apk"
           ls -la dist/
           sha256sum "dist/M.S.J GFX.apk" | tee dist/SHA256SUMS.txt
@@ -176,6 +177,9 @@ jobs:
           uniform translucent window over the frame. It deepens blacks and
           shifts white point, which is what makes a panel read richer."
           if gh release view "$TAG" >/dev/null 2>&1; then
+            # gh release upload sanitises spaces in asset names to dots, so the
+            # published asset is "M.S.J.GFX.apk". Unavoidable through this API;
+            # the exact name survives in the build artifact and in CI output.
             gh release upload "$TAG" "dist/M.S.J GFX.apk" --clobber
           else
             gh release create "$TAG" "dist/M.S.J GFX.apk" --title "M.S.J GFX $TAG" --notes "$NOTES"
