@@ -108,6 +108,7 @@ fun MsjRoot(
                     hit = vm.hit.collectAsState().value,
                     watchState = vm.watchState.collectAsState().value,
                     usageGranted = usageGranted,
+                    diag = vm.diag.collectAsState().value,
                     onRequestUsageAccess = onRequestUsageAccess,
                     onBoost = vm::boost,
                     onResync = vm::resyncDetection,
@@ -138,6 +139,7 @@ private fun DashTab(
     hit: com.msj.gfx.core.GameDetector.Hit?,
     watchState: com.msj.gfx.core.GameWatcher.State,
     usageGranted: Boolean,
+    diag: String,
     onRequestUsageAccess: () -> Unit,
     onBoost: () -> Unit, onResync: () -> Unit,
     onToggleBooster: (Boolean) -> Unit,
@@ -155,7 +157,7 @@ private fun DashTab(
         Spacer(Modifier.height(16.dp))
         DetectionCard(
             detected, hit, watchState, usageGranted, perf.freeRamMb, perf.lowMemory,
-            vm.diag.collectAsState().value, onRequestUsageAccess, onResync
+            diag, onRequestUsageAccess, onResync
         )
 
         Spacer(Modifier.height(16.dp))

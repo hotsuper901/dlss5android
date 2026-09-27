@@ -2,7 +2,9 @@ package com.msj.gfx.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.msj.gfx.core.BoostDiagnostics
 import com.msj.gfx.core.GameCatalog
+import com.msj.gfx.core.GameDetector
 import com.msj.gfx.core.GameWatcher
 import com.msj.gfx.core.MemoryTools
 import com.msj.gfx.core.PerfMonitor
