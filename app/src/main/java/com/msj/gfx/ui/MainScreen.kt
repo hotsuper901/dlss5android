@@ -28,12 +28,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.msj.gfx.core.DisplayController
 import com.msj.gfx.core.GameCatalog
+import com.msj.gfx.core.GraphicsEnhancer
 import com.msj.gfx.core.MemoryTools
 import com.msj.gfx.core.PerfSnapshot
 import com.msj.gfx.core.Preset
@@ -64,6 +68,9 @@ fun MsjRoot(
     val overlayOn by settings.overlayOn.collectAsState()
     val autoTrim by settings.autoTrim.collectAsState()
     val preset by settings.preset.collectAsState()
+    val forceRefresh by settings.forceRefresh.collectAsState()
+    val keepAwake by settings.keepAwake.collectAsState()
+    val aggressiveTrim by settings.aggressiveTrim.collectAsState()
     val vm = remember { BoostViewModel() }
     val perf by vm.perf.collectAsState()
     val boosting by vm.boosting.collectAsState()
@@ -114,7 +121,13 @@ fun MsjRoot(
                     onResync = vm::resyncDetection,
                     onToggleBooster = onToggleBooster,
                     onPreset = settings::setPreset,
-                    onToggleAutoTrim = settings::setAutoTrim
+                    onToggleAutoTrim = settings::setAutoTrim,
+                    forceRefresh = forceRefresh,
+                    keepAwake = keepAwake,
+                    aggressiveTrim = aggressiveTrim,
+                    onToggleForceRefresh = settings::setForceRefresh,
+                    onToggleKeepAwake = settings::setKeepAwake,
+                    onToggleAggressiveTrim = settings::setAggressiveTrim
                 )
                 Tab.GAMES -> GamesTab(vm, onOpenGame)
                 Tab.HUD -> HudTab(
@@ -143,8 +156,17 @@ private fun DashTab(
     onRequestUsageAccess: () -> Unit,
     onBoost: () -> Unit, onResync: () -> Unit,
     onToggleBooster: (Boolean) -> Unit,
-    onPreset: (Preset) -> Unit, onToggleAutoTrim: (Boolean) -> Unit
+    onPreset: (Preset) -> Unit, onToggleAutoTrim: (Boolean) -> Unit,
+    forceRefresh: Boolean, keepAwake: Boolean, aggressiveTrim: Boolean,
+    onToggleForceRefresh: (Boolean) -> Unit,
+    onToggleKeepAwake: (Boolean) -> Unit,
+    onToggleAggressiveTrim: (Boolean) -> Unit
 ) {
+    // Special access, not a runtime permission, and the peak-refresh override
+    // silently no-ops without it - so surface the state rather than pretending.
+    var canWrite by remember { mutableStateOf(DisplayController.canWriteSettings()) }
+    val maxHz = remember { DisplayController.maxRefreshHz() }
+    val clipboard = LocalClipboardManager.current
     Column(
         Modifier
             .fillMaxSize()
@@ -194,7 +216,89 @@ private fun DashTab(
         Spacer(Modifier.height(18.dp))
         BigButton(boosting, onBoost)
 
+        Spacer(Modifier.height(18.dp))
+        SectionLabel("GRAPHICS ENHANCER")
+
+        val activeProfile = GraphicsEnhancer.profileFor(detected)
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(Panel)
+                .padding(14.dp)
+        ) {
+            Text(
+                if (detected != null) "PRESET FOR ${detected.label.uppercase()}"
+                else "PRESET FOR DETECTED GAME",
+                fontSize = 10.sp, color = NeonCyan, fontWeight = FontWeight.Black
+            )
+            Spacer(Modifier.height(10.dp))
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                ProfileChip("RES SCALE", "${activeProfile.resolutionScalePct}%", Modifier.weight(1f))
+                ProfileChip("FPS CAP", "${activeProfile.fpsCap}", Modifier.weight(1f))
+                ProfileChip("SHADOWS", activeProfile.shadows, Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                ProfileChip("TEXTURES", activeProfile.textures, Modifier.weight(1f))
+                ProfileChip("ANTI-ALIAS", activeProfile.antiAliasing, Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(12.dp))
+            TextButton(
+                onClick = {
+                    clipboard.setText(AnnotatedString(GraphicsEnhancer.checklistFor(detected)))
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    "COPY SETTINGS CHECKLIST",
+                    color = NeonCyan, fontWeight = FontWeight.Black, fontSize = 12.sp
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "These are the values to set inside the game's own graphics menu - the " +
+                    "app cannot write another app's settings, so this is the part you apply once.",
+                fontSize = 10.sp, color = Muted, lineHeight = 15.sp
+            )
+        }
+
         Spacer(Modifier.height(16.dp))
+        ToggleRow(
+            "Force peak refresh",
+            if (maxHz != null && maxHz > 60f)
+                "Pins the display to ${maxHz.roundToInt()}Hz while a game is in front, " +
+                    "then hands it back on exit"
+            else "No high-refresh panel detected on this device",
+            forceRefresh && canWrite,
+            onChange = {
+                if (!canWrite) {
+                    DisplayController.openWriteSettings()
+                } else {
+                    onToggleForceRefresh(it)
+                }
+            }
+        )
+        if (!canWrite) {
+            Notice(
+                "Peak refresh override needs \"Modify system settings\". Tap the toggle to grant it.",
+                WarnYellow
+            )
+        }
+        ToggleRow("Keep screen awake", "Holds the display on during a match", keepAwake, onToggleKeepAwake)
+        ToggleRow(
+            "Aggressive trim in game",
+            "Trims background RAM the moment a game comes forward, releases on exit",
+            aggressiveTrim, onToggleAggressiveTrim
+        )
+
+        Spacer(Modifier.height(18.dp))
         SectionLabel("PRESET")
         Presets.ALL.forEach { p ->
             PresetRow(
@@ -657,6 +761,20 @@ private fun GamesTab(vm: BoostViewModel, onOpenGame: (String) -> Unit) {
 }
 
 @Composable
+private fun ProfileChip(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(
+        modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(PanelHi)
+            .padding(vertical = 8.dp, horizontal = 8.dp)
+    ) {
+        Text(label, fontSize = 8.sp, color = Muted, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(2.dp))
+        Text(value, fontSize = 12.sp, color = Ink, fontWeight = FontWeight.Black)
+    }
+}
+
+@Composable
 private fun GameCard(g: GameCatalog.Game, onOpenGame: (String) -> Unit, installed: Boolean = true) {
     val accent = Color(g.accent)
     Column(
@@ -687,7 +805,31 @@ private fun GameCard(g: GameCatalog.Game, onOpenGame: (String) -> Unit, installe
                 Text("NOT INSTALLED", fontSize = 9.sp, color = Muted)
             }
         }
+        val profile = GraphicsEnhancer.profileFor(g)
         Spacer(Modifier.height(10.dp))
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            ProfileChip("RES", "${profile.resolutionScalePct}%", Modifier.weight(1f))
+            ProfileChip("FPS", "${profile.fpsCap}", Modifier.weight(1f))
+            ProfileChip("SHADOWS", profile.shadows, Modifier.weight(1f))
+        }
+        Spacer(Modifier.height(8.dp))
+        TextButton(
+            onClick = {
+                LocalClipboardManager.current.setText(
+                    AnnotatedString(GraphicsEnhancer.checklistFor(g))
+                )
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                "COPY CHECKLIST",
+                color = accent, fontWeight = FontWeight.Black, fontSize = 11.sp
+            )
+        }
+        Spacer(Modifier.height(4.dp))
         g.levers.forEach {
             Row(Modifier.padding(vertical = 3.dp)) {
                 Text("› ", color = accent, fontWeight = FontWeight.Black)

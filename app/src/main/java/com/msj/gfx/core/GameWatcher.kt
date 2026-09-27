@@ -44,6 +44,7 @@ class GameWatcher(
     private val _launches = MutableStateFlow(0)
     val launches = _launches
 
+    private var applied = false
     private var previous: GameCatalog.Game? = null
     private var previousPkg: String? = null
 
@@ -96,6 +97,37 @@ class GameWatcher(
         previous = game
         _current.value = game
         _state.value = if (result != null) State.IN_GAME else State.IDLE
+
+        if (result != null) applyEnhancePolicy() else releaseEnhancePolicy()
+    }
+
+    /**
+     * The display and memory side of the Graphics Enhancer, applied on entry.
+     *
+     * Everything here is a control the OS actually exposes to us - peak
+     * refresh rate and trim aggressiveness. It is deliberately not a graphics
+     * patch: the in-game values live in the game's own process and are
+     * surfaced to the player as a checklist instead.
+     */
+    private fun applyEnhancePolicy() {
+        if (applied) return
+        applied = true
+        val store = SettingsStore.get()
+        if (store.forceRefresh.value) {
+            DisplayController.maxRefreshHz()?.let { DisplayController.setPeakRefresh(it) }
+        }
+        if (store.aggressiveTrim.value) {
+            runCatching { MemoryTools.trim() }
+        }
+    }
+
+    /** Hand the display back and stop trimming, so we do not drain a battery. */
+    private fun releaseEnhancePolicy() {
+        if (!applied) return
+        applied = false
+        if (SettingsStore.get().forceRefresh.value) {
+            runCatching { DisplayController.releasePeakRefresh() }
+        }
     }
 
     companion object {
@@ -104,6 +136,7 @@ class GameWatcher(
     }
 
     fun stop() {
+        releaseEnhancePolicy()
         job?.cancel()
         job = null
         previousPkg = null

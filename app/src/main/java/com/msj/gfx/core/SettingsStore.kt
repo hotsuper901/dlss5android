@@ -49,6 +49,18 @@ class SettingsStore(context: Context) {
     private val _preset = MutableStateFlow(Presets.byKey(prefs.getString(K_PRESET, "balanced")!!))
     val preset = _preset
 
+    // --- Graphics Enhancer -------------------------------------------------
+    // Defaults are conservative: we do not pin a phone to 120Hz on first run,
+    // because that is a real battery cost and it should be the user's call.
+    private val _forceRefresh = MutableStateFlow(prefs.getBoolean(K_FORCE_REFRESH, false))
+    val forceRefresh = _forceRefresh
+
+    private val _keepAwake = MutableStateFlow(prefs.getBoolean(K_KEEP_AWAKE, true))
+    val keepAwake = _keepAwake
+
+    private val _aggressiveTrim = MutableStateFlow(prefs.getBoolean(K_AGGRESSIVE_TRIM, true))
+    val aggressiveTrim = _aggressiveTrim
+
     private val _firstRun = MutableStateFlow(prefs.getInt(K_RUNS, 0) == 0)
     val firstRun = _firstRun
 
@@ -68,6 +80,18 @@ class SettingsStore(context: Context) {
         _preset.value = p
     }
 
+    fun setForceRefresh(on: Boolean) = prefs.edit().putBoolean(K_FORCE_REFRESH, on).apply().also {
+        _forceRefresh.value = on
+    }
+
+    fun setKeepAwake(on: Boolean) = prefs.edit().putBoolean(K_KEEP_AWAKE, on).apply().also {
+        _keepAwake.value = on
+    }
+
+    fun setAggressiveTrim(on: Boolean) = prefs.edit().putBoolean(K_AGGRESSIVE_TRIM, on).apply().also {
+        _aggressiveTrim.value = on
+    }
+
     fun markRun() {
         prefs.edit().putInt(K_RUNS, prefs.getInt(K_RUNS, 0) + 1).apply()
         _firstRun.value = false
@@ -79,6 +103,9 @@ class SettingsStore(context: Context) {
         private const val K_AUTOTRIM = "auto_trim"
         private const val K_PRESET = "preset"
         private const val K_RUNS = "runs"
+        private const val K_FORCE_REFRESH = "force_refresh"
+        private const val K_KEEP_AWAKE = "keep_awake"
+        private const val K_AGGRESSIVE_TRIM = "aggressive_trim"
         @Volatile private var instance: SettingsStore? = null
 
         fun get(): SettingsStore = instance ?: synchronized(this) {
