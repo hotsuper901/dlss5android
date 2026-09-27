@@ -286,6 +286,33 @@ object DisplayController {
      */
     const val K_PEAK_REFRESH_RATE = "peak_refresh_rate"
     const val K_MIN_REFRESH_RATE = "min_refresh_rate"
+    const val K_SCREEN_COLOR_MODE = "screen_color_mode"
+
+    /**
+     * Ask the OEM display pipeline for a vivid colour profile.
+     *
+     * This is the only true colour-matrix re-map of another app's pixels that
+     * exists without root: the display driver does it in hardware, downstream
+     * of the game, so we never enter its process. It is also the honest answer
+     * to "make the colours pop" - far more so than any tint layer we could
+     * draw ourselves.
+     *
+     * Returns false when the key is absent, which is most non-Samsung builds,
+     * and callers should treat that as "not supported here" rather than a
+     * failure. Writes are best-effort because the value domain differs by OEM.
+     */
+    fun setOemVividMode(vivid: Boolean): Boolean = runCatching {
+        val res = Ctx.get().contentResolver
+        if (!Settings.System.canWrite(Ctx.get())) return false
+        val existing = Settings.System.getString(res, K_SCREEN_COLOR_MODE) ?: return false
+        // Only touch it if the key already exists on this build, so we never
+        // write a vendor-unknown value into system settings.
+        if (existing.isEmpty()) return false
+        val current = existing.toIntOrNull() ?: return false
+        val target = if (vivid) (if (current == 0) 1 else current) else 0
+        Settings.System.putString(res, K_SCREEN_COLOR_MODE, target.toString())
+        true
+    }.getOrDefault(false)
 
     fun setKeepScreenOn(window: android.view.Window?, on: Boolean) {
         runCatching {

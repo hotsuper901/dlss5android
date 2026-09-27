@@ -61,6 +61,13 @@ class SettingsStore(context: Context) {
     private val _aggressiveTrim = MutableStateFlow(prefs.getBoolean(K_AGGRESSIVE_TRIM, true))
     val aggressiveTrim = _aggressiveTrim
 
+    // Visual layer (live tint over other apps). 0 = layer removed entirely.
+    private val _tintDepth = MutableStateFlow(prefs.getInt(K_TINT_DEPTH, 0))
+    val tintDepth = _tintDepth
+
+    private val _tintWarmth = MutableStateFlow(prefs.getInt(K_TINT_WARMTH, 0))
+    val tintWarmth = _tintWarmth
+
     private val _firstRun = MutableStateFlow(prefs.getInt(K_RUNS, 0) == 0)
     val firstRun = _firstRun
 
@@ -92,6 +99,14 @@ class SettingsStore(context: Context) {
         _aggressiveTrim.value = on
     }
 
+    fun setTintDepth(v: Int) = prefs.edit().putInt(K_TINT_DEPTH, v.coerceIn(0, 40)).apply().also {
+        _tintDepth.value = v.coerceIn(0, 40)
+    }
+
+    fun setTintWarmth(v: Int) = prefs.edit().putInt(K_TINT_WARMTH, v.coerceIn(-60, 60)).apply().also {
+        _tintWarmth.value = v.coerceIn(-60, 60)
+    }
+
     fun markRun() {
         prefs.edit().putInt(K_RUNS, prefs.getInt(K_RUNS, 0) + 1).apply()
         _firstRun.value = false
@@ -106,6 +121,8 @@ class SettingsStore(context: Context) {
         private const val K_FORCE_REFRESH = "force_refresh"
         private const val K_KEEP_AWAKE = "keep_awake"
         private const val K_AGGRESSIVE_TRIM = "aggressive_trim"
+        private const val K_TINT_DEPTH = "tint_depth"
+        private const val K_TINT_WARMTH = "tint_warmth"
         @Volatile private var instance: SettingsStore? = null
 
         fun get(): SettingsStore = instance ?: synchronized(this) {

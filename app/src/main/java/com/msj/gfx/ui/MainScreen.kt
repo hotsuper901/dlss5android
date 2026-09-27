@@ -1,7 +1,10 @@
 package com.msj.gfx.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -12,6 +15,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Memory
@@ -27,15 +31,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.graphics.BitmapFactory
+import com.msj.gfx.core.ColorOverlayService
 import com.msj.gfx.core.DisplayController
+import com.msj.gfx.core.ImageEnhancer
 import com.msj.gfx.core.GameCatalog
 import com.msj.gfx.core.GraphicsEnhancer
 import com.msj.gfx.core.MemoryTools
@@ -43,11 +52,16 @@ import com.msj.gfx.core.PerfSnapshot
 import com.msj.gfx.core.Preset
 import com.msj.gfx.core.Presets
 import com.msj.gfx.core.SettingsStore
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 import kotlin.math.roundToInt
 
 private enum class Tab(val label: String, val icon: ImageVector) {
     DASH("Boost", Icons.Filled.Bolt),
     GAMES("Games", Icons.Filled.Tune),
+    ENHANCE("Enhance", Icons.Filled.AutoAwesome),
     HUD("HUD", Icons.Filled.Layers),
     ABOUT("About", Icons.Filled.Memory)
 }
@@ -71,6 +85,8 @@ fun MsjRoot(
     val forceRefresh by settings.forceRefresh.collectAsState()
     val keepAwake by settings.keepAwake.collectAsState()
     val aggressiveTrim by settings.aggressiveTrim.collectAsState()
+    val tintDepth by settings.tintDepth.collectAsState()
+    val tintWarmth by settings.tintWarmth.collectAsState()
     val vm = remember { BoostViewModel() }
     val perf by vm.perf.collectAsState()
     val boosting by vm.boosting.collectAsState()
@@ -130,6 +146,14 @@ fun MsjRoot(
                     onToggleAggressiveTrim = settings::setAggressiveTrim
                 )
                 Tab.GAMES -> GamesTab(vm, onOpenGame)
+                Tab.ENHANCE -> EnhanceTab(
+                    overlayGranted = overlayGranted,
+                    onRequestOverlay = onRequestOverlay,
+                    depth = tintDepth,
+                    warmth = tintWarmth,
+                    onDepth = settings::setTintDepth,
+                    onWarmth = settings::setTintWarmth
+                )
                 Tab.HUD -> HudTab(
                     overlayOn = overlayOn, overlayGranted = overlayGranted,
                     onRequestOverlay = onRequestOverlay,
@@ -838,6 +862,300 @@ private fun GameCard(g: GameCatalog.Game, onOpenGame: (String) -> Unit, installe
                 Text(it, color = Body, fontSize = 12.sp, lineHeight = 18.sp)
             }
         }
+    }
+}
+
+/* ------------------------------ ENHANCE ------------------------------ */
+
+/**
+ * The two halves of the visual enhancer.
+ *
+ * Live layer: a tint over other apps. Documented in ColorOverlayService as what
+ * it actually is - it changes what your eye reads, it is not a colour-matrix
+ * re-map of the game's pixels, because that would need either the OEM display
+ * pipeline or a screen capture.
+ *
+ * Offline pipeline: the desktop enhancer's stage order run on images the user
+ * owns. Denoise, unsharp mask, colour matrix, scale, export.
+ */
+@Composable
+private fun EnhanceTab(
+    overlayGranted: Boolean,
+    onRequestOverlay: () -> Unit,
+    depth: Int,
+    warmth: Int,
+    onDepth: (Int) -> Unit,
+    onWarmth: (Int) -> Unit
+) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    var source by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var result by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var note by remember { mutableStateOf("") }
+
+    var denoise by remember { mutableFloatStateOf(0f) }
+    var sharpen by remember { mutableFloatStateOf(45f) }
+    var saturation by remember { mutableFloatStateOf(130f) }
+    var contrast by remember { mutableFloatStateOf(112f) }
+    var warmthIn by remember { mutableFloatStateOf(8f) }
+    var scaleIdx by remember { mutableIntStateOf(0) }
+
+    val picker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) {
+            val bmp = runCatching {
+                ctx.contentResolver.openInputStream(uri)?.use {
+                    BitmapFactory.decodeStream(it)
+                }
+            }.getOrNull()
+            source = bmp
+            result = null
+            note = if (bmp == null) "Could not read that image." else ""
+        }
+    }
+
+    // Drives the live layer. ColorOverlayService.start() sends ACTION_UPDATE
+    // rather than restarting, so dragging a slider does not tear down and
+    // rebuild a fullscreen window under the game.
+    var layerWasOn by remember { mutableStateOf(depth != 0 || warmth != 0) }
+    LaunchedEffect(depth, warmth, overlayGranted) {
+        if (!overlayGranted) return@LaunchedEffect
+        val nowOn = depth != 0 || warmth != 0
+        if (nowOn) {
+            ColorOverlayService.start(ctx, depth, warmth)
+            layerWasOn = true
+        } else if (layerWasOn) {
+            ColorOverlayService.stop(ctx)
+            layerWasOn = false
+        }
+    }
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 18.dp)
+    ) {
+        Spacer(Modifier.height(16.dp))
+        Text("VISUAL ENHANCER", fontSize = 24.sp, fontWeight = FontWeight.Black, color = NeonCyan)
+        Text(
+            "Live colour layer over other apps, plus an offline sharpen pipeline",
+            fontSize = 12.sp, color = Muted, lineHeight = 17.sp
+        )
+        Spacer(Modifier.height(18.dp))
+
+        if (!overlayGranted) {
+            Notice(
+                "The live layer needs \"Display over other apps\". It is composited by " +
+                    "SurfaceFlinger on top of the game - we never enter its process.",
+                WarnYellow
+            )
+            Spacer(Modifier.height(10.dp))
+            Button(
+                onClick = onRequestOverlay,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp)
+            ) { Text("GRANT OVERLAY PERMISSION", fontWeight = FontWeight.Black, fontSize = 12.sp) }
+            Spacer(Modifier.height(18.dp))
+        } else {
+            SectionLabel("LIVE LAYER OVER GAMES")
+            SliderRow("Depth", depth, 0, 40, "%", onDepth)
+            SliderRow("Warmth", warmth, -60, 60, "", onWarmth)
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Depth darkens the frame a little, which is what makes saturated art read " +
+                    "richer on an OLED. Warmth shifts the white point amber or blue. Both are " +
+                    "tint layers, not a re-map of the game's own pixels - that is the OEM " +
+                    "display mode below.",
+                fontSize = 10.sp, color = Muted, lineHeight = 15.sp
+            )
+            Spacer(Modifier.height(14.dp))
+            SectionLabel("IMAGE PIPELINE")
+        }
+
+        Spacer(Modifier.height(10.dp))
+        Text(
+            "Denoise \u2192 Sharpen \u2192 Colour \u2192 Scale",
+            fontSize = 11.sp, color = NeonCyan, fontWeight = FontWeight.Bold
+        )
+        Spacer(Modifier.height(10.dp))
+
+        Button(
+            onClick = { picker.launch("image/*") },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(14.dp),
+            enabled = !busy
+        ) { Text("PICK IMAGE", fontWeight = FontWeight.Black, fontSize = 12.sp) }
+
+        Spacer(Modifier.height(12.dp))
+
+        SectionLabel("PRESETS")
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            ImageEnhancer.Presets.ALL.forEach { (label, pre) ->
+                TextButton(
+                    onClick = {
+                        denoise = pre.denoise.toFloat()
+                        sharpen = pre.sharpen.toFloat()
+                        saturation = pre.saturation.toFloat()
+                        contrast = pre.contrast.toFloat()
+                        warmthIn = pre.warmth.toFloat()
+                        // Index 3 in listOf(1f, 1.25f, 1.5f, 2f, 3f) is 2x,
+                        // and "Upscale 2x" is the only preset that sets it.
+                        if (pre.scale == 2f) scaleIdx = 3
+                    },
+                    modifier = Modifier.weight(1f)
+                ) { Text(label.uppercase(), fontSize = 10.sp, color = NeonCyan) }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        SliderRow("Denoise", denoise, 0, 100, "%", { denoise = it })
+        SliderRow("Sharpen", sharpen, 0, 100, "%", { sharpen = it })
+        SliderRow("Saturation", saturation, 0, 250, "%", { saturation = it })
+        SliderRow("Contrast", contrast, 50, 160, "%", { contrast = it })
+        SliderRow("Warmth", warmthIn, -50, 50, "", { warmthIn = it })
+
+        Spacer(Modifier.height(8.dp))
+        SectionLabel("SCALE")
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            listOf(1f, 1.25f, 1.5f, 2f, 3f).forEachIndexed { i, f ->
+                TextButton(
+                    onClick = { scaleIdx = i },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(
+                        if (f == 1f) "1x" else "${f}x",
+                        fontSize = 11.sp,
+                        color = if (scaleIdx == i) NeonCyan else Muted
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(14.dp))
+        Button(
+            onClick = {
+                val s = source ?: return@Button
+                busy = true
+                note = ""
+                val p = ImageEnhancer.Params(
+                    denoise = denoise.toInt(),
+                    sharpen = sharpen.toInt(),
+                    saturation = saturation.toInt(),
+                    contrast = contrast.toInt(),
+                    warmth = warmthIn.toInt(),
+                    scale = listOf(1f, 1.25f, 1.5f, 2f, 3f)[scaleIdx]
+                )
+                scope.launch(Dispatchers.Default) {
+                    val out = runCatching { ImageEnhancer.process(s, p) }.getOrNull()
+                    withContext(Dispatchers.Main) {
+                        result = out
+                        busy = false
+                        note = if (out == null) "Processing failed." else ""
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(14.dp),
+            enabled = source != null && !busy
+        ) {
+            Text(
+                if (busy) "PROCESSING..." else "ENHANCE",
+                fontWeight = FontWeight.Black, fontSize = 13.sp
+            )
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = {
+                val out = result ?: return@Button
+                val dir = ctx.getExternalFilesDir(null) ?: ctx.filesDir
+                val file = File(dir, "msj_enhanced_${System.currentTimeMillis()}.jpg")
+                val saved = ImageEnhancer.save(out, file, asPng = false, quality = 95)
+                note = if (saved != null) "Saved: ${saved.name}" else "Could not write the file."
+            },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(14.dp),
+            enabled = result != null && !busy
+        ) { Text("SAVE TO GALLERY FOLDER", fontWeight = FontWeight.Black, fontSize = 12.sp) }
+
+        if (note.isNotBlank()) {
+            Spacer(Modifier.height(8.dp))
+            Text(note, fontSize = 11.sp, color = NeonCyan, fontFamily = FontFamily.Monospace)
+        }
+
+        Spacer(Modifier.height(16.dp))
+        source?.let { src ->
+            Text("ORIGINAL  ${src.width}\u00d7${src.height}", fontSize = 10.sp, color = Muted)
+            Spacer(Modifier.height(6.dp))
+            Image(
+                bitmap = src.asImageBitmap(),
+                contentDescription = null,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+            )
+        }
+        result?.let { r ->
+            Spacer(Modifier.height(14.dp))
+            Text(
+                "ENHANCED  ${r.width}\u00d7${r.height}",
+                fontSize = 10.sp, color = NeonCyan, fontWeight = FontWeight.Bold
+            )
+            Spacer(Modifier.height(6.dp))
+            Image(
+                bitmap = r.asImageBitmap(),
+                contentDescription = null,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+            )
+        }
+
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+/** Integer slider row with a live value readout, matching the app's ToggleRow look. */
+@Composable
+private fun SliderRow(
+    label: String,
+    value: Int,
+    min: Int,
+    max: Int,
+    suffix: String,
+    onChange: (Int) -> Unit
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            label,
+            fontSize = 12.sp, color = Ink, fontWeight = FontWeight.Bold,
+            modifier = Modifier.width(96.dp)
+        )
+        Slider(
+            value = value.toFloat(),
+            onValueChange = { onChange(it.toInt()) },
+            valueRange = min.toFloat()..max.toFloat(),
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            "$value$suffix",
+            fontSize = 11.sp, color = NeonCyan, fontFamily = FontFamily.Monospace,
+            modifier = Modifier.width(54.dp),
+            textAlign = TextAlign.End
+        )
     }
 }
 

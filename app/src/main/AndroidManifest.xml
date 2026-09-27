@@ -72,6 +72,16 @@
         </activity>
 
         <service
+        android:name=".core.ColorOverlayService"
+        android:enabled="true"
+        android:exported="false"
+        android:foregroundServiceType="specialUse">
+        <property
+            android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+            android:value="visual_layer" />
+    </service>
+
+    <service
             android:name=".core.CoolerService"
             android:exported="false"
             android:foregroundServiceType="specialUse">
