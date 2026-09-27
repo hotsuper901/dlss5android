@@ -114,4 +114,11 @@ val namedReleaseApk by tasks.registering(Copy::class) {
     into(layout.buildDirectory.dir("outputs/apk/named"))
 }
 
-tasks.named("assembleRelease") { finalizedBy(namedReleaseApk) }
+// assembleRelease is registered by AGP after this script is evaluated, so a
+// plain tasks.named("assembleRelease") fails configuration with "task with name
+// not found". Deferring the lookup to afterEvaluate is the fix.
+afterEvaluate {
+    tasks.matching { it.name == "assembleRelease" }.configureEach {
+        finalizedBy(namedReleaseApk)
+    }
+}
