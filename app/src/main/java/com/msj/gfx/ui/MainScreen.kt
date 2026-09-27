@@ -1,0 +1,542 @@
+package com.msj.gfx.ui
+
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Thermostat
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.msj.gfx.core.GameCatalog
+import com.msj.gfx.core.MemoryTools
+import com.msj.gfx.core.PerfSnapshot
+import com.msj.gfx.core.Preset
+import com.msj.gfx.core.Presets
+import com.msj.gfx.core.SettingsStore
+import kotlin.math.roundToInt
+
+private enum class Tab(val label: String, val icon: ImageVector) {
+    DASH("Boost", Icons.Filled.Bolt),
+    GAMES("Games", Icons.Filled.Tune),
+    HUD("HUD", Icons.Filled.Layers),
+    ABOUT("About", Icons.Filled.Memory)
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MsjRoot(
+    overlayGranted: Boolean,
+    onRequestOverlay: () -> Unit,
+    onToggleBooster: (Boolean) -> Unit,
+    onToggleOverlay: (Boolean) -> Unit,
+    onOpenGame: (String) -> Unit
+) {
+    val settings = remember { SettingsStore.get() }
+    val boosterOn by settings.boosterOn.collectAsState()
+    val overlayOn by settings.overlayOn.collectAsState()
+    val autoTrim by settings.autoTrim.collectAsState()
+    val preset by settings.preset.collectAsState()
+    val vm = remember { BoostViewModel() }
+    val perf by vm.perf.collectAsState()
+    val boosting by vm.boosting.collectAsState()
+    val log by vm.log.collectAsState()
+
+    var tab by rememberSaveable { mutableStateOf(Tab.DASH) }
+    val snack = remember { SnackbarHostState() }
+
+    LaunchedEffect(log) {
+        if (log.isNotBlank()) snack.showSnackbar(log)
+    }
+
+    Scaffold(
+        containerColor = DeepBg,
+        snackbarHost = { SnackbarHost(snack) },
+        bottomBar = {
+            NavigationBar(containerColor = Panel) {
+                Tab.entries.forEach { t ->
+                    NavigationBarItem(
+                        selected = tab == t,
+                        onClick = { tab = t },
+                        icon = { Icon(t.icon, t.label) },
+                        label = { Text(t.label, fontSize = 10.sp) },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = NeonCyan,
+                            selectedTextColor = NeonCyan,
+                            indicatorColor = PanelHi,
+                            unselectedIconColor = Muted,
+                            unselectedTextColor = Muted
+                        )
+                    )
+                }
+            }
+        }
+    ) { pad ->
+        Box(Modifier.padding(pad).fillMaxSize()) {
+            when (tab) {
+                Tab.DASH -> DashTab(
+                    perf = perf, boosting = boosting, boosterOn = boosterOn,
+                    autoTrim = autoTrim, preset = preset,
+                    onBoost = vm::boost,
+                    onToggleBooster = onToggleBooster,
+                    onPreset = settings::setPreset,
+                    onToggleAutoTrim = settings::setAutoTrim
+                )
+                Tab.GAMES -> GamesTab(onOpenGame)
+                Tab.HUD -> HudTab(
+                    overlayOn = overlayOn, overlayGranted = overlayGranted,
+                    onRequestOverlay = onRequestOverlay,
+                    onToggleOverlay = onToggleOverlay
+                )
+                Tab.ABOUT -> AboutTab()
+            }
+        }
+    }
+}
+
+/* ------------------------------ DASH ------------------------------ */
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DashTab(
+    perf: PerfSnapshot, boosting: Boolean, boosterOn: Boolean, autoTrim: Boolean,
+    preset: Preset, onBoost: () -> Unit, onToggleBooster: (Boolean) -> Unit,
+    onPreset: (Preset) -> Unit, onToggleAutoTrim: (Boolean) -> Unit
+) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 18.dp)
+    ) {
+        Spacer(Modifier.height(14.dp))
+        Header()
+
+        Spacer(Modifier.height(18.dp))
+        RamBar(perf.ramUsedMb, perf.ramTotalMb)
+
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            StatTile(Icons.Filled.Speed, "CPU", "${perf.cpuLoad}%", Modifier.weight(1f))
+            val t = perf.batteryTempC ?: perf.cpuTempC
+            StatTile(
+                Icons.Filled.Thermostat, "TEMP",
+                t?.let { "${it.roundToInt()}°" } ?: "--", Modifier.weight(1f),
+                alert = t != null && t >= 42f
+            )
+            StatTile(Icons.Filled.Memory, "SOC", perf.soc.take(6), Modifier.weight(1f))
+        }
+
+        if (perf.throttling) {
+            Spacer(Modifier.height(12.dp))
+            Notice(
+                "Thermal throttling detected (${(perf.batteryTempC ?: perf.cpuTempC ?: 0f).roundToInt()}°C). " +
+                    "The SoC is dropping below its boost clock right now - set ${preset.inGameGraphics} in-game.",
+                WarnYellow
+            )
+        }
+
+        Spacer(Modifier.height(18.dp))
+        BigButton(boosting, onBoost)
+
+        Spacer(Modifier.height(16.dp))
+        SectionLabel("PRESET")
+        Presets.ALL.forEach { p ->
+            PresetRow(
+                p, p.key == preset.key,
+                onClick = { onPreset(p) },
+                quality = MemoryTools.recommendQuality(perf.cpuLoad, perf.ramPct, perf.batteryTempC ?: perf.cpuTempC)
+            )
+        }
+
+        Spacer(Modifier.height(16.dp))
+        ToggleRow("Background booster", "Keeps RAM trimmed the whole session", boosterOn, onToggleBooster)
+        ToggleRow("Auto-trim on game launch", "Trims 3.5s after a match starts", autoTrim, onToggleAutoTrim)
+
+        Spacer(Modifier.height(20.dp))
+        Text(
+            "Creator: M.S.J",
+            color = Muted, fontSize = 11.sp,
+            modifier = Modifier.fillMaxWidth(), horizontalAlignment = TextAlign.Center
+        )
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+@Composable
+private fun Header() {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.Bottom
+    ) {
+        Column {
+            Text(
+                "MSJ GFX",
+                fontSize = 28.sp, fontWeight = FontWeight.Black,
+                color = NeonCyan, letterSpacing = 1.sp
+            )
+            Text("Game Graphics Enhancer", fontSize = 12.sp, color = Muted)
+        }
+        Text("v1.0.0", fontSize = 11.sp, color = Muted)
+    }
+}
+
+@Composable
+private fun RamBar(used: Int, total: Int) {
+    val pct = if (total > 0) used.toFloat() / total else 0f
+    val bar by animateFloatAsState(pct.coerceIn(0f, 1f), tween(500, easing = FastOutSlowInEasing), label = "ram")
+    val c by animateColorAsState(
+        when {
+            pct > 0.88f -> HotAmber
+            pct > 0.72f -> WarnYellow
+            else -> OkGreen
+        }, label = "ramc"
+    )
+    Column(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
+            Text("MEMORY", fontSize = 11.sp, color = Muted, fontWeight = FontWeight.Bold)
+            Text("$used / $total MB", fontSize = 11.sp, color = Muted)
+        }
+        Spacer(Modifier.height(6.dp))
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(12.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(PanelHi)
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth(bar)
+                    .height(12.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(c)
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "${MemoryTools.freeRamMb()} MB free for the game",
+            fontSize = 10.sp, color = Muted
+        )
+    }
+}
+
+@Composable
+private fun StatTile(
+    icon: ImageVector, label: String, value: String,
+    mod: Modifier, alert: Boolean = false
+) {
+    Column(
+        mod
+            .clip(RoundedCornerShape(16.dp))
+            .background(Panel)
+            .border(1.dp, if (alert) HotAmber else Color(0xFF1F2A3D), RoundedCornerShape(16.dp))
+            .padding(12.dp)
+    ) {
+        Icon(icon, null, tint = if (alert) HotAmber else Color(0xFF3B4A61), modifier = Modifier.size(18.dp))
+        Spacer(Modifier.height(8.dp))
+        Text(value, fontSize = 16.sp, fontWeight = FontWeight.Black, color = Ink, maxLines = 1)
+        Text(label, fontSize = 10.sp, color = Muted, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun BigButton(boosting: Boolean, onClick: () -> Unit) {
+    val glow by animateFloatAsState(if (boosting) 1f else 0.85f, label = "glow")
+    Button(
+        onClick = onClick,
+        enabled = !boosting,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(60.dp)
+            .clip(RoundedCornerShape(18.dp)),
+        shape = RoundedCornerShape(18.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (boosting) OkGreen else NeonCyan,
+            contentColor = DeepBg
+        ),
+        elevation = ButtonDefaults.buttonElevation(
+            defaultElevation = if (boosting) 12.dp else 4.dp * glow
+        )
+    ) {
+        Icon(Icons.Filled.Bolt, null, modifier = Modifier.size(22.dp))
+        Spacer(Modifier.width(8.dp))
+        Text(
+            if (boosting) "BOOSTING…" else "BOOST NOW",
+            fontSize = 16.sp, fontWeight = FontWeight.Black, letterSpacing = 1.sp
+        )
+    }
+}
+
+@Composable
+private fun PresetRow(p: Preset, selected: Boolean, onClick: () -> Unit, quality: String) {
+    val border by animateColorAsState(
+        if (selected) NeonCyan else Color(0xFF1F2A3D), label = "pb"
+    )
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 5.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(Panel)
+            .border(1.dp, border, RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(p.title, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Ink)
+            Text("${p.inGameGraphics} - ${p.frameRateTarget}", fontSize = 11.sp, color = Muted)
+            if (selected) {
+                Text("Recommended now: $quality", fontSize = 10.sp, color = OkGreen)
+            }
+        }
+        if (selected) Text("✓", color = NeonCyan, fontSize = 16.sp, fontWeight = FontWeight.Black)
+    }
+}
+
+@Composable
+private fun ToggleRow(title: String, sub: String, value: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(Panel)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Ink)
+            Text(sub, fontSize = 11.sp, color = Muted)
+        }
+        Switch(
+            checked = value, onCheckedChange = onChange,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = DeepBg,
+                checkedTrackColor = NeonCyan,
+                uncheckedTrackColor = PanelHi
+            )
+        )
+    }
+}
+
+@Composable
+private fun Notice(text: String, tint: Color) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(tint.copy(alpha = 0.12f))
+            .border(1.dp, tint.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
+            .padding(12.dp)
+    ) {
+        Text("!  ", color = tint, fontWeight = FontWeight.Black)
+        Text(text, color = Body, fontSize = 12.sp, lineHeight = 18.sp)
+    }
+}
+
+/* ------------------------------ GAMES ------------------------------ */
+
+@Composable
+private fun GamesTab(onOpenGame: (String) -> Unit) {
+    val games = remember { GameCatalog.installed() }
+    Column(Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
+        Spacer(Modifier.height(16.dp))
+        Text("SUPPORTED GAMES", fontSize = 12.sp, color = Muted, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(10.dp))
+
+        if (games.isEmpty()) {
+            Notice(
+                "No supported title detected. Install Free Fire, Free Fire MAX or PUBG Mobile " +
+                    "and reopen this screen - we detect them automatically.",
+                WarnYellow
+            )
+        }
+
+        LazyColumn(
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(bottom = 24.dp)
+        ) {
+            items(games, key = { it.packageName }) { g ->
+                GameCard(g, onOpenGame)
+            }
+            items(GameCatalog.ALL.filter { it !in games }) { g ->
+                GameCard(g, onOpenGame, installed = false)
+            }
+        }
+    }
+}
+
+@Composable
+private fun GameCard(g: GameCatalog.Game, onOpenGame: (String) -> Unit, installed: Boolean = true) {
+    val accent = Color(g.accent)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(Panel)
+            .border(1.dp, accent.copy(alpha = 0.35f), RoundedCornerShape(18.dp))
+            .padding(16.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier
+                    .size(10.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(if (installed) accent else Muted)
+            )
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(g.label, fontSize = 16.sp, fontWeight = FontWeight.Black, color = Ink)
+                Text(g.packageName, fontSize = 10.sp, color = Muted)
+            }
+            if (installed) {
+                TextButton(onClick = { onOpenGame(g.packageName) }) {
+                    Text("LAUNCH", color = accent, fontWeight = FontWeight.Black, fontSize = 12.sp)
+                }
+            } else {
+                Text("NOT INSTALLED", fontSize = 9.sp, color = Muted)
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        g.levers.forEach {
+            Row(Modifier.padding(vertical = 3.dp)) {
+                Text("› ", color = accent, fontWeight = FontWeight.Black)
+                Text(it, color = Body, fontSize = 12.sp, lineHeight = 18.sp)
+            }
+        }
+    }
+}
+
+/* ------------------------------ HUD ------------------------------ */
+
+@Composable
+private fun HudTab(
+    overlayOn: Boolean, overlayGranted: Boolean,
+    onRequestOverlay: () -> Unit, onToggleOverlay: (Boolean) -> Unit
+) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 18.dp)
+    ) {
+        Spacer(Modifier.height(16.dp))
+        Text("ON-SCREEN HUD", fontSize = 12.sp, color = Muted, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(10.dp))
+
+        if (!overlayGranted) {
+            Notice(
+                "Overlay permission is required. Android composites the HUD on top of the game " +
+                    "window - we never touch the game's own process.",
+                WarnYellow
+            )
+            Spacer(Modifier.height(10.dp))
+            Button(
+                onClick = onRequestOverlay, modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp)
+            ) { Text("GRANT OVERLAY PERMISSION", fontWeight = FontWeight.Black, fontSize = 12.sp) }
+        } else {
+            ToggleRow("Show HUD over games", "CPU, frametime and RAM while you play", overlayOn, onToggleOverlay)
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Text("WHAT THE HUD SHOWS", fontSize = 12.sp, color = Muted, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        listOf(
+            "Live CPU load, sampled differentially from /proc/stat",
+            "Frametime in milliseconds - the number that actually predicts stutter",
+            "RAM used vs total, turning red past 88% where texture thrash starts",
+            "Thermal state, because 45C and climbing means 40fps regardless of quality setting"
+        ).forEach {
+            Row(Modifier.padding(vertical = 5.dp)) {
+                Text("›  ", color = NeonCyan, fontWeight = FontWeight.Black)
+                Text(it, color = Body, fontSize = 13.sp, lineHeight = 19.sp)
+            }
+        }
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+/* ------------------------------ ABOUT ------------------------------ */
+
+@Composable
+private fun AboutTab() {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 18.dp)
+    ) {
+        Spacer(Modifier.height(20.dp))
+        Text("MSJ GFX", fontSize = 24.sp, fontWeight = FontWeight.Black, color = NeonCyan)
+        Text("Game Graphics Enhancer & FPS Booster", fontSize = 13.sp, color = Body)
+        Text("Created by M.S.J", fontSize = 13.sp, color = OkGreen, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(18.dp))
+
+        Text("WHY THERE IS NO INJECTOR HERE", fontSize = 12.sp, color = Muted, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        listOf(
+            "Free Fire, Free Fire MAX and PUBG Mobile ship signed ARM64 binaries with vendor anti-cheat. A process injector has to defeat their integrity checks first, and every one of them that claims to works is really a memory reader.",
+            "Those memory readers change nothing permanently. The values are re-validated on the next match, so the \"60 FPS Ultra\" lasts one round and then the account is flagged.",
+            "Accounts caught using them are banned in roughly three to ten minutes, and the ban is usually a hardware-level ID ban that survives a reinstall.",
+            "Freeing RAM, staying out of thermal throttle, and using the game's own graphics menu is where actual frames come from. That is the part this app automates.",
+            "The HUD is drawn with a normal user-granted overlay window. Nothing is injected into the game process, because nothing needs to be."
+        ).forEach {
+            Row(Modifier.padding(vertical = 5.dp)) {
+                Text("›  ", color = NeonCyan, fontWeight = FontWeight.Black)
+                Text(it, color = Body, fontSize = 13.sp, lineHeight = 19.sp)
+            }
+        }
+
+        Spacer(Modifier.height(18.dp))
+        Text("PERMISSIONS USED", fontSize = 12.sp, color = Muted, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        listOf(
+            "SYSTEM_ALERT_WINDOW - draws the HUD on top of the game",
+            "FOREGROUND_SERVICE_SPECIAL_USE - keeps the booster alive so Android does not force-close it",
+            "RECEIVE_BOOT_COMPLETED - restarts the booster after a reboot, only if you left it on",
+            "QUERY_ALL_PACKAGES - detects which supported game is installed"
+        ).forEach {
+            Row(Modifier.padding(vertical = 4.dp)) {
+                Text("›  ", color = OkGreen, fontWeight = FontWeight.Black)
+                Text(it, color = Body, fontSize = 12.sp, lineHeight = 18.sp)
+            }
+        }
+        Spacer(Modifier.height(26.dp))
+    }
+}
+
+/* ------------------------------ shared bits ------------------------------ */
+
+@Composable
+internal fun SectionLabel(text: String) {
+    Text(text, fontSize = 11.sp, color = Muted, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+    Spacer(Modifier.height(8.dp))
+}

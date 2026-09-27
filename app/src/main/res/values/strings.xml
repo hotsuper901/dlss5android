@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">MSJ GFX</string>
+    <string name="creator">M.S.J</string>
+    <string name="boost_channel_name">RAM Booster</string>
+    <string name="boost_channel_desc">Keeps memory trimmed while you play</string>
+</resources>
