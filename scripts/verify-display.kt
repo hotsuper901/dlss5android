@@ -1,4 +1,5 @@
 import com.msj.gfx.core.DisplayController
+import com.msj.gfx.core.OverlayWindowPolicy
 import com.msj.gfx.core.DisplayProfile
 import com.msj.gfx.core.LookPreset
 import com.msj.gfx.core.LookPresets
@@ -87,6 +88,57 @@ fun main() {
     check("assumed profile is OLED", DisplayProfile.ASSUMED.isOled)
     check("assumed profile does not scale depth", DisplayProfile.ASSUMED.depthScale == 1.0f)
     check("lcd scales depth", lcd().depthScale < 1.0f)
+
+    // Regression: "attach a game, select a preset, the depth flashes".
+    //
+    // apply() used to take the cheap path when the colour was unchanged and the
+    // expensive one when it changed: removeView() followed by addView(). That
+    // makes SurfaceFlinger destroy and recreate a fullscreen overlay surface,
+    // which over a running game is a white flash and a dropped frame. The
+    // invariant is that a colour change never needs a new window.
+    run {
+        val OPAQUE = -0x1000000 // opaque black, as Color.argb(255,...) would be
+        val OTHER = -0x2000000
+        val CLEAR = 0
+
+        check(
+            "no window and an opaque colour: build one",
+            OverlayWindowPolicy.needsRebuild(false, null, OPAQUE)
+        )
+        check(
+            "no window and a transparent colour: add nothing",
+            !OverlayWindowPolicy.needsRebuild(false, null, CLEAR)
+        )
+        check(
+            "window present, colour unchanged: no rebuild",
+            !OverlayWindowPolicy.needsRebuild(true, OPAQUE, OPAQUE)
+        )
+        check(
+            "window present, colour CHANGED: still no rebuild (the flash bug)",
+            !OverlayWindowPolicy.needsRebuild(true, OPAQUE, OTHER)
+        )
+        check(
+            "window present, going transparent: no rebuild either",
+            !OverlayWindowPolicy.needsRebuild(true, OPAQUE, CLEAR)
+        )
+
+        // The regression in one assertion: no (hasView, current, want)
+        // combination with a view already up may ask for a rebuild.
+        var offenders = 0
+        val colors = listOf(CLEAR, OPAQUE, OTHER, -1, 0x7f000000.toInt())
+        for (cur in colors) for (want in colors) {
+            if (OverlayWindowPolicy.needsRebuild(true, cur, want)) offenders++
+        }
+        check("an attached window is never rebuilt", offenders == 0, "$offenders cases")
+
+        // And with no window, exactly the opaque cases are added.
+        var added = 0
+        for (want in colors) {
+            if (OverlayWindowPolicy.needsRebuild(false, null, want)) added++
+        }
+        check("only opaque colours get a window", added == colors.count { it != CLEAR },
+            "added=$added")
+    }
 
     // Regression for "flashlight screen when select preset when game on".
     //

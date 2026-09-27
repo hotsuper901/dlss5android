@@ -37,6 +37,24 @@ import com.msj.gfx.R
  * display pipeline (see DisplayController.setOemVividMode), or screen capture
  * and re-presentation, which costs 50-150ms and is unusable for play.
  */
+/**
+ * When does the overlay window need adding or removing at all?
+ *
+ * Split out as a pure function so the answer is testable off-device. The
+ * invariant it encodes is the whole point of the fix: a change of *colour* must
+ * never require a new window, because re-adding a fullscreen overlay is what
+ * flashes over a running game.
+ */
+internal object OverlayWindowPolicy {
+    /**
+     * @param hasView whether a window is currently attached
+     * @param currentColor the colour it is showing, or null if unknown
+     * @param want the colour being asked for
+     */
+    fun needsRebuild(hasView: Boolean, currentColor: Int?, want: Int): Boolean =
+        !hasView && want != Color.TRANSPARENT
+}
+
 class ColorOverlayService : android.app.Service() {
 
     private var overlay: View? = null
@@ -61,6 +79,19 @@ class ColorOverlayService : android.app.Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_UPDATE && foregroundStarted) {
+            // Hot path: the service is already foreground and the window is
+            // already attached, so update the colour and return without
+            // touching the notification.
+            val d = intent.getIntExtra(EXTRA_DEPTH, -1)
+            val w = intent.getIntExtra(EXTRA_WARMTH, Int.MIN_VALUE)
+            if (d != -1) SettingsStore.get().setTintDepth(d)
+            if (w != Int.MIN_VALUE) SettingsStore.get().setTintWarmth(w)
+            if (hasOverlayPermission()) {
+                apply(SettingsStore.get().tintDepth.value, SettingsStore.get().tintWarmth.value)
+                return START_STICKY
+            }
+        }
         when (intent?.action) {
             ACTION_STOP -> { stopSelf(); return START_NOT_STICKY }
             ACTION_UPDATE -> {
@@ -79,32 +110,58 @@ class ColorOverlayService : android.app.Service() {
     override fun onDestroy() {
         runCatching { overlay?.let { wm?.removeView(it) } }
         overlay = null
+        currentTag = null
+        foregroundStarted = false
         super.onDestroy()
     }
 
     /**
-     * Rebuilds the layer only when its parameters change, because a
-     * WindowManager update is a full relayout of a fullscreen window and doing
-     * that every slider tick is visible as a hitch over the game.
+     * Pushes the current depth/warmth into the overlay, without ever tearing
+     * the window down to do it.
+     *
+     * This used to be inverted, and the inversion was the bug. The old code
+     * took the cheap path when the colour was *unchanged* and the expensive
+     * path when it *changed*:
+     *
+     *     if (current != null && want == currentTag) { setBackgroundColor; return }
+     *     if (current != null) { removeView(current) }   // colour changed
+     *     ... addView(new View) ...
+     *
+     * Removing and re-adding a fullscreen TYPE_APPLICATION_OVERLAY makes
+     * SurfaceFlinger destroy and recreate the surface. Over a running game that
+     * is a white flash and a dropped frame - precisely "attach a game, select a
+     * preset, the depth flashes". It also threw away the View and built a fresh
+     * one, contradicting the field comment above that promised the view is
+     * created once and re-parented.
+     *
+     * Changing a background colour on a view that is already attached is a
+     * drawable swap: no relayout, no surface churn, no flash. So that is now
+     * the only path, and the view is genuinely created once.
      */
     private fun apply(depth: Int, warmth: Int) {
         val want = colorFor(depth, warmth)
-        val current = overlay
-        if (current != null && want == currentTag) {
-            runCatching { current.setBackgroundColor(want) }
+
+        val existing = overlay
+
+        if (!OverlayWindowPolicy.needsRebuild(existing != null, currentTag, want)) {
+            // A window is already attached, or there is nothing worth showing.
+            // Either way this is a recolour, never a rebuild.
+            if (existing != null && want != currentTag) {
+                runCatching { existing.setBackgroundColor(want) }
+                currentTag = want
+            }
             return
         }
 
-        if (current != null) {
-            runCatching { wm?.removeView(current) }
-            overlay = null
-            currentTag = null
-        }
-        if (depth == 0 && warmth == 0) return
-
         wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        val view = View(this).apply { setBackgroundColor(want) }
+        val view = View(this)
+        view.setBackgroundColor(want)
         runCatching { wm?.addView(view, buildParams()) }
+            .onFailure {
+                // No window is better than a window we failed to add; leave
+                // overlay null so the next apply() retries cleanly.
+                return
+            }
         overlay = view
         currentTag = want
     }
@@ -215,6 +272,16 @@ class ColorOverlayService : android.app.Service() {
     private fun hasOverlayPermission(): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this)
 
+    /**
+     * True once startForeground has been called, so it is not re-posted on
+     * every update.
+     *
+     * Preset changes arrive as onStartCommand calls. Re-posting a foreground
+     * notification each time makes some OEM skins re-animate the notification
+     * shade, which reads as a second flicker on top of the overlay one.
+     */
+    private var foregroundStarted = false
+
     private fun startForegroundCompat() = runCatching {
         val n = NotificationCompat.Builder(this, CH_ID)
             .setContentTitle("MSJ GFX visual layer")
@@ -235,6 +302,7 @@ class ColorOverlayService : android.app.Service() {
         } else {
             startForeground(NOTIF_ID, n)
         }
+        foregroundStarted = true
     }
 
     private fun ensureChannel() {
