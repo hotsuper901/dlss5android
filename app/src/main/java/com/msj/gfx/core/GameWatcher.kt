@@ -5,6 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -25,6 +26,7 @@ class GameWatcher(
     private val intervalMs: Long = 1200L
 ) {
     private var job: Job? = null
+    private var lookJob: Job? = null
 
     enum class State { UNKNOWN_NO_PERMISSION, IDLE, IN_GAME }
 
@@ -45,6 +47,16 @@ class GameWatcher(
     val launches = _launches
 
     private var applied = false
+
+    /**
+     * What was actually pushed, not what the store currently says.
+     *
+     * Teardown used to re-read the selected look, which meant that changing the
+     * look while sitting inside a game left a tint with nobody willing to turn
+     * it off. Tracking the applied look makes teardown symmetric with apply
+     * even if the selection moves underneath us.
+     */
+    private var appliedLook: LookPreset? = null
     private var previous: GameCatalog.Game? = null
     private var previousPkg: String? = null
 
@@ -59,6 +71,17 @@ class GameWatcher(
             while (isActive) {
                 runCatching { tick() }
                 delay(intervalMs)
+            }
+        }
+        // Re-apply when the selection changes while a game is already open.
+        // applyEnhancePolicy() is guarded by `applied`, so a look picked from
+        // the UI mid-session would otherwise sit there doing nothing until the
+        // next game launch. Collect the flow and push immediately instead.
+        lookJob = scope.launch(Dispatchers.Default) {
+            runCatching {
+                SettingsStore.get().look.collect { _ ->
+                    if (applied) applyLook()
+                }
             }
         }
     }
@@ -135,13 +158,24 @@ class GameWatcher(
     private fun applyLook() {
         val store = SettingsStore.get()
         val look = store.look.value
-        if (look.key == "off") return
+        // Re-entering the same look should not restart the service, but a
+        // different look must replace the running one cleanly.
+        if (appliedLook?.key == look.key) return
 
         scope.launch {
+            // Switching to Off has to actively clear, not just do nothing.
+            // The old early-return meant picking Off while a tint was running
+            // left that tint up until the user left the game.
+            if (look.key == "off") {
+                clearLook()
+                return@launch
+            }
+
+            val ctx = Ctx.get()
+
             // Overlay tint: depth + warmth over the game's own frame.
             if (look.needsOverlay) {
                 runCatching {
-                    val ctx = Ctx.get()
                     if (android.provider.Settings.canDrawOverlays(ctx)) {
                         ColorOverlayService.start(ctx, look.depth, look.warmth)
                     }
@@ -161,7 +195,18 @@ class GameWatcher(
             if (look.oemVivid) {
                 runCatching { DisplayController.setOemVividMode(true) }
             }
+            appliedLook = look
         }
+    }
+
+    /** Undo exactly one look, used both by Off and by teardown. */
+    private fun clearLook() {
+        val was = appliedLook
+        appliedLook = null
+        if (was == null) return
+        runCatching { ColorOverlayService.stop(Ctx.get()) }
+        if (was.refreshHz > 0) runCatching { DisplayController.releasePeakRefresh() }
+        if (was.oemVivid) runCatching { DisplayController.setOemVividMode(false) }
     }
 
     /** Hand the display back and stop trimming, so we do not drain a battery. */
@@ -174,13 +219,7 @@ class GameWatcher(
         }
         // Put the screen back the way we found it. Leaving a tint over whatever
         // app the user opens next is the kind of thing that gets an app removed.
-        val look = store.look.value
-        if (look.needsOverlay) {
-            runCatching { ColorOverlayService.stop(Ctx.get()) }
-        }
-        if (look.oemVivid) {
-            runCatching { DisplayController.setOemVividMode(false) }
-        }
+        clearLook()
     }
 
     companion object {
@@ -192,6 +231,8 @@ class GameWatcher(
         releaseEnhancePolicy()
         job?.cancel()
         job = null
+        lookJob?.cancel()
+        lookJob = null
         previousPkg = null
         previous = null
         _current.value = null

@@ -191,8 +191,19 @@ class ColorOverlayService : android.app.Service() {
             )
         }
 
+        /**
+         * startForegroundService, not startService.
+         *
+         * A background startService throws IllegalStateException from Android
+         * 8.0 onward, and the watcher calls this from a background coroutine the
+         * moment a game leaves the foreground - which is exactly the case that
+         * is not allowed. Wrapped in runCatching, so the old version failed
+         * silently every time and the tint was never actually removed. Going
+         * through the foreground path works because the service is already
+         * foreground, and ACTION_STOP calls stopSelf() immediately.
+         */
         fun stop(ctx: Context) = runCatching {
-            ctx.startService(
+            ctx.startForegroundService(
                 Intent(ctx, ColorOverlayService::class.java).setAction(ACTION_STOP)
             )
         }

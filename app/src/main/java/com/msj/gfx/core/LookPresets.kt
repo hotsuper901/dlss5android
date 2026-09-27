@@ -82,9 +82,15 @@ object LookPresets {
     )
 
     /** Maximum display refresh, nothing else touched. For input-latency feel. */
+    /**
+     * Was a no-op: refreshHz 0 means "leave the display alone", so the preset
+     * whose entire description is "peak refresh" was asking for nothing.
+     * 120 is a request, not a pin - GameWatcher checks it against the panel's
+     * actual max and silently skips if the screen cannot do it.
+     */
     val FPS_FOCUS = LookPreset(
         "fps", "FPS Focus", "Peak refresh, colour left alone",
-        depth = 0, warmth = 0, refreshHz = 0, oemVivid = false
+        depth = 0, warmth = 0, refreshHz = 120, oemVivid = false
     )
 
     /** Hard tint. Reads strong on any panel, heavy on OLED. */
@@ -105,10 +111,16 @@ object LookPresets {
         depth = 10, warmth = 34, refreshHz = 0, oemVivid = false
     )
 
-    /** A whisper of depth, so dark areas stop crushing without adding much. */
-    val LIFT = LookPreset(
-        "lift", "Shadow Lift", "Bare-there depth",
-        depth = -0, warmth = 0, refreshHz = 0, oemVivid = false
+    /**
+     * Was "Shadow Lift", and it could never have worked: a tint layer can only
+     * darken, and lifting shadows means brightening them. depth clamps to
+     * 0..40, so the -0 it was written with was just a zero wearing a minus
+     * sign, and the preset did nothing at all. Replaced with a cool tint,
+     * which is the one direction this mechanism genuinely goes.
+     */
+    val COOL = LookPreset(
+        "cool", "Cool Shadow", "Blue tint, cuts glare late at night",
+        depth = 12, warmth = -30, refreshHz = 0, oemVivid = false
     )
 
     /** Everything at once, for measuring what each stage is actually worth. */
@@ -118,12 +130,32 @@ object LookPresets {
     )
 
     val BUILT_IN = listOf(
-        OFF, OLED_BOOST, FPS_FOCUS, POP, TEAL_ORANGE, NIGHT, LIFT, MAX
+        OFF, OLED_BOOST, FPS_FOCUS, POP, TEAL_ORANGE, NIGHT, COOL, MAX
     )
 
-    /** Imported looks are appended by [merge]. */
+    /**
+     * Imported looks are appended, minus any that collide with a built-in key.
+     *
+     * Without that filter an import file could put a second "OLED Boost" in the
+     * list, and since byKey() takes the first match, the duplicate would be an
+     * unreachable row that could never be selected. A built-in key always wins:
+     * shipping a corrected built-in should not be defeated by a stale export.
+     */
     fun all(imported: List<LookPreset> = emptyList()): List<LookPreset> =
-        BUILT_IN + imported.filter { it.custom }
+        BUILT_IN + imported.filter { imp ->
+            imp.custom && BUILT_IN.none { it.key == imp.key }
+        }
+
+    /**
+     * Every built-in except [OFF] must change something. Three presets shipped
+     * dead before this existed - two with all-zero fields and one written as
+     * "-0" - and nothing caught it, because a no-op preset still compiles, still
+     * renders, still shows an ON badge. verify-looks.kt asserts this.
+     */
+    fun noOpBuiltIns(): List<String> = BUILT_IN
+        .filter { it.key != "off" }
+        .filter { it.depth == 0 && it.warmth == 0 && it.refreshHz == 0 && !it.oemVivid }
+        .map { it.key }
 
     fun byKey(k: String?, imported: List<LookPreset> = emptyList()): LookPreset =
         all(imported).firstOrNull { it.key == k } ?: OFF
