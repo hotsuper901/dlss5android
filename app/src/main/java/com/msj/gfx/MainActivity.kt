@@ -108,6 +108,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun overlayGrantedNow(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this)
+
     private fun requestOverlay() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
         // No result contract on purpose: ACTION_MANAGE_OVERLAY_PERMISSION does

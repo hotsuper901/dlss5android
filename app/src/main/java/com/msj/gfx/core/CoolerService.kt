@@ -114,7 +114,7 @@ class CoolerService : Service() {
                 // ~12s means the SoC is throttling and dropping to Smooth beats
                 // stuttering at Ultra.
                 if (heatTicks == 3 && settings.autoTrim.value) {
-                    MemoryTools.cooldown(400)
+                    MemoryTools.cooldown(400)  // suspends, does not block
                     val r = MemoryTools.trim()
                     notify(buildNotification("Trimmed while throttling", r.note))
                 }

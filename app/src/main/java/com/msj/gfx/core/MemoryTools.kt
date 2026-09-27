@@ -110,9 +110,10 @@ object MemoryTools {
             while (events.hasNextEvent()) {
                 events.getNextEvent(event)
                 val pkg = event.packageName ?: continue
+                // Only the public constants. WINDOW_IN_FOCUS is @hide and does
+                // not resolve against the public SDK, which breaks the build.
                 val isForeground =
                     event.eventType == UsageEvents.Event.ACTIVITY_RESUMED ||
-                        event.eventType == UsageEvents.Event.WINDOW_IN_FOCUS ||
                         event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND
                 // Skip our own package: the booster is a foreground service and
                 // would otherwise win the race against the game.
@@ -160,6 +161,13 @@ object MemoryTools {
      * No CPU input - a sandboxed app cannot measure device-wide CPU reliably,
      * and a number that reads 0 while the phone is at 100% is worse than none.
      */
+    /**
+     * Suspends the caller. A suspending cooldown, not SystemClock.sleep, so it
+     * never blocks a thread - and never blocks the UI thread, which is what
+     * made the old BOOST path trip an ANR.
+     */
+    suspend fun cooldown(ms: Long) = kotlinx.coroutines.delay(ms)
+
     fun recommendQuality(ramPct: Int, tempC: Float?, charging: Boolean): String = when {
         tempC != null && tempC >= 44f ->
             "SMOOTH - the SoC is throttling, quality will not help"

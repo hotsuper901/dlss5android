@@ -8,9 +8,7 @@ import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
-import android.os.Handler
 import android.os.IBinder
-import android.os.Looper
 import android.provider.Settings
 import android.util.TypedValue
 import android.view.Gravity
@@ -41,7 +39,6 @@ import kotlinx.coroutines.withContext
  */
 class GameOverlayService : android.app.Service() {
 
-    private val handler = Handler(Looper.getMainLooper())
     private var root: LinearLayout? = null
     private var wm: WindowManager? = null
     private var tickScope: CoroutineScope? = null
@@ -57,6 +54,7 @@ class GameOverlayService : android.app.Service() {
         }
         ensureChannel()
         startForegroundCompat()
+        if (tickScope == null) startTicking()
     }
 
     @SuppressLint("InflateParams")
@@ -68,14 +66,15 @@ class GameOverlayService : android.app.Service() {
         if (!hasOverlayPermission()) { stopSelf(); return START_NOT_STICKY }
         if (root == null) buildOverlay()
         startForegroundCompat()
-        if (tick == null) startTicking()
+        // Idempotent: the loop is guarded so a second ACTION_TOGGLE start
+        // cannot spin up a second sampler.
+        if (tickScope == null) startTicking()
         return START_STICKY
     }
 
     override fun onDestroy() {
         tickScope?.cancel()
         tickScope = null
-        handler.removeCallbacksAndMessages(null)
         runCatching { root?.let { wm?.removeView(it) } }
         root = null
         super.onDestroy()
@@ -159,6 +158,7 @@ class GameOverlayService : android.app.Service() {
     }
 
     private fun startTicking() {
+        if (tickScope != null) return
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         tickScope = scope
         scope.launch {
