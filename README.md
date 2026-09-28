@@ -16,6 +16,11 @@ a frametime/RAM HUD on top of your game.
 | Thermal state | `BatteryManager.BATTERY_PROPERTY_TEMPERATURE` with `/sys/class/thermal/thermal_zone*` fallback |
 | RAM reclaim | `Runtime.gc()` + `TRIM_MEMORY_RUNNING_CRITICAL`, reporting a real before/after of device-wide `availMem` |
 | Never force-closed | Foreground service, `START_STICKY`, `FOREGROUND_SERVICE_SPECIAL_USE` |
+| Battery-optimisation exemption | `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` — nothing granted silently; the dashboard opens the system dialog, and Doze ignores wakelocks until it is granted |
+| CPU wakelock | `PARTIAL_WAKE_LOCK` held only while a tracked game is in front, released on exit/service teardown/permission loss. No timeout by design — the session bracket is explicit and a timeout would drop protection mid-match |
+| Keep screen awake | `SCREEN_BRIGHT_WAKE_LOCK` session lock plus `FLAG_KEEP_SCREEN_ON` on the HUD window while a session is active — never while the HUD sits idle on the launcher |
+| OEM cleaners | Opens the manufacturer autostart screen directly (MIUI, EMUI, ColorOS, Funtouch, OxygenOS, One UI, ZenUI) |
+| Grant detection | Overlay, Usage access, the battery exemption and WRITE_SETTINGS are all re-read on every `onResume`. Granting one in Settings shows up the moment you come back — no force close, no toggle-twice |
 | Survives reboot | `BootReceiver` restarts it *only* if you left the toggle on |
 | Auto-arm on launch | `GameWatcher` reads `UsageEvents` every 1.2s, trims 4s after a game appears |
 | On-screen HUD | `TYPE_APPLICATION_OVERLAY` window, finger-draggable, 500ms refresh, sampled off the main thread |
@@ -50,7 +55,13 @@ Without them the release build falls back to the debug key so CI still runs.
 - `PACKAGE_USAGE_STATS` — special access; the only way to see the foreground app on Android 5.1+
 - `RECEIVE_BOOT_COMPLETED` — restart after reboot
 - `QUERY_ALL_PACKAGES` — detect which supported game is installed
-- `WAKE_LOCK` — reserved for the HUD's tick loop
+- `WAKE_LOCK` — a CPU lock held only while a tracked game is in front, and a screen lock while the keep-awake toggle is on. Both released on game exit, service teardown, or if Usage access is revoked mid-match
+- `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` — special access the user grants from the dashboard. Doze ignores app wakelocks without it, which is exactly how a "running" booster gets frozen between matches. The button opens the system dialog; there is no silent grant
+
+Two things the keep-alive layer deliberately is not: it never holds a wakelock
+at idle (the locks are bracketed by the game session), and it never claims the
+exemption is required for the app to open at all. Without it the booster still
+works — it is just the first thing Doze freezes when the phone is untouched.
 
 No internet permission. Nothing is uploaded, there is no analytics SDK, and no
 permission is requested that isn't in the table above.

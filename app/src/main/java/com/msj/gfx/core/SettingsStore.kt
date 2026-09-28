@@ -58,6 +58,12 @@ class SettingsStore(context: Context) {
     private val _keepAwake = MutableStateFlow(prefs.getBoolean(K_KEEP_AWAKE, true))
     val keepAwake = _keepAwake
 
+    // On by default: a foreground service is not enough on its own, Android can
+    // still park the process mid-match, and the lock is only held while a game
+    // is actually in front - never at idle, so the default costs nothing off-session.
+    private val _cpuWakeLock = MutableStateFlow(prefs.getBoolean(K_CPU_WAKELOCK, true))
+    val cpuWakeLock = _cpuWakeLock
+
     private val _aggressiveTrim = MutableStateFlow(prefs.getBoolean(K_AGGRESSIVE_TRIM, true))
     val aggressiveTrim = _aggressiveTrim
 
@@ -151,6 +157,10 @@ class SettingsStore(context: Context) {
         _keepAwake.value = on
     }
 
+    fun setCpuWakeLock(on: Boolean) = prefs.edit().putBoolean(K_CPU_WAKELOCK, on).apply().also {
+        _cpuWakeLock.value = on
+    }
+
     fun setAggressiveTrim(on: Boolean) = prefs.edit().putBoolean(K_AGGRESSIVE_TRIM, on).apply().also {
         _aggressiveTrim.value = on
     }
@@ -176,6 +186,7 @@ class SettingsStore(context: Context) {
         private const val K_RUNS = "runs"
         private const val K_FORCE_REFRESH = "force_refresh"
         private const val K_KEEP_AWAKE = "keep_awake"
+        private const val K_CPU_WAKELOCK = "cpu_wakelock"
         private const val K_AGGRESSIVE_TRIM = "aggressive_trim"
         private const val K_TINT_DEPTH = "tint_depth"
         private const val K_TINT_WARMTH = "tint_warmth"

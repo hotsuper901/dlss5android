@@ -223,17 +223,35 @@ object DisplayController {
     }
 
     /**
+     * The display this app is drawing on.
+     *
+     * Context.getDisplay() only exists from API 30, and on anything older it is
+     * a NoSuchMethodError swallowed by the runCatching around every caller -
+     * which reads as "no high-refresh panel detected" on a 120Hz Android 10
+     * phone. The WindowManager path is the API 24-29 route and returns the same
+     * panel for an app whose only window layer is an overlay.
+     */
+    private fun display(): android.view.Display? = runCatching {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Ctx.get().display
+        } else {
+            @Suppress("DEPRECATION")
+            (Ctx.get().getSystemService(Context.WINDOW_SERVICE) as? WindowManager)?.defaultDisplay
+        }
+    }.getOrNull()
+
+    /**
      * Highest refresh rate the panel advertises, in Hz, or null on devices with
      * no user-visible refresh setting (many 60Hz-only phones).
      */
     fun maxRefreshHz(): Float? = runCatching {
-        val d = Ctx.get().display ?: return@runCatching null
+        val d = display() ?: return@runCatching null
         d.supportedModes.maxOfOrNull { it.refreshRate }
     }.getOrNull()
 
     /** What the panel is actually running at right now. */
     fun currentRefreshHz(): Float? = runCatching {
-        Ctx.get().display?.refreshRate
+        display()?.refreshRate
     }.getOrNull()
 
     /**

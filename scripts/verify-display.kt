@@ -1,6 +1,8 @@
 import java.io.File
 import com.msj.gfx.core.DisplayController
 import com.msj.gfx.core.OverlayWindowPolicy
+import com.msj.gfx.core.WindowTint
+import com.msj.gfx.core.tintFor
 import com.msj.gfx.core.DisplayProfile
 import com.msj.gfx.core.LookPreset
 import com.msj.gfx.core.LookPresets
@@ -137,47 +139,69 @@ fun main() {
     // which over a running game is a white flash and a dropped frame. The
     // invariant is that a colour change never needs a new window.
     run {
-        val OPAQUE = -0x1000000 // opaque black, as Color.argb(255,...) would be
-        val OTHER = -0x2000000
-        val CLEAR = 0
+        val OPAQUE = WindowTint(-0x1000000, 1f) // opaque black, as Color.rgb would produce
+        val OTHER = WindowTint(-0x2000000, 1f)
+        val CLEAR = WindowTint(0, 0f)
 
         check(
-            "no window and an opaque colour: build one",
-            OverlayWindowPolicy.needsRebuild(false, null, OPAQUE)
+            "no window and a non-empty tint: build one",
+            OverlayWindowPolicy.decide(false, OPAQUE) == OverlayWindowPolicy.Action.ATTACH
         )
         check(
-            "no window and a transparent colour: add nothing",
-            !OverlayWindowPolicy.needsRebuild(false, null, CLEAR)
+            "no window and an empty tint: add nothing",
+            OverlayWindowPolicy.decide(false, CLEAR) == OverlayWindowPolicy.Action.NONE
         )
         check(
-            "window present, colour unchanged: no rebuild",
-            !OverlayWindowPolicy.needsRebuild(true, OPAQUE, OPAQUE)
+            "window present, tint unchanged: recolour, no rebuild",
+            OverlayWindowPolicy.decide(true, OPAQUE) == OverlayWindowPolicy.Action.RECOLOR
         )
         check(
-            "window present, colour CHANGED: still no rebuild (the flash bug)",
-            !OverlayWindowPolicy.needsRebuild(true, OPAQUE, OTHER)
+            "window present, tint CHANGED: still no rebuild (the flash bug)",
+            OverlayWindowPolicy.decide(true, OTHER) == OverlayWindowPolicy.Action.RECOLOR
         )
         check(
-            "window present, going transparent: no rebuild either",
-            !OverlayWindowPolicy.needsRebuild(true, OPAQUE, CLEAR)
+            "window present, going empty: detach rather than leave a dead window",
+            OverlayWindowPolicy.decide(true, CLEAR) == OverlayWindowPolicy.Action.DETACH
         )
 
-        // The regression in one assertion: no (hasView, current, want)
-        // combination with a view already up may ask for a rebuild.
+        // The regression in one assertion: an attached window is never rebuilt.
         var offenders = 0
-        val colors = listOf(CLEAR, OPAQUE, OTHER, -1, 0x7f000000.toInt())
-        for (cur in colors) for (want in colors) {
-            if (OverlayWindowPolicy.needsRebuild(true, cur, want)) offenders++
+        val colors = listOf(
+            CLEAR, OPAQUE, OTHER,
+            WindowTint(-1, 0.4f), WindowTint(0x7f000000, 0.2f)
+        )
+        for (want in colors) {
+            if (OverlayWindowPolicy.decide(true, want) == OverlayWindowPolicy.Action.ATTACH) offenders++
         }
         check("an attached window is never rebuilt", offenders == 0, "$offenders cases")
 
-        // And with no window, exactly the opaque cases are added.
+        // And with no window, exactly the non-empty tints are added.
         var added = 0
         for (want in colors) {
-            if (OverlayWindowPolicy.needsRebuild(false, null, want)) added++
+            if (OverlayWindowPolicy.decide(false, want) == OverlayWindowPolicy.Action.ATTACH) added++
         }
-        check("only opaque colours get a window", added == colors.count { it != CLEAR },
+        check("only non-empty tints get a window", added == colors.count { !it.isEmpty },
             "added=$added")
+    }
+
+    // Regression for "layar tidak bisa ditekan/digeser saat tint aktif" on
+    // Android 12+: the input system measures the WINDOW alpha, not the colour
+    // byte, against the 0.8 untrusted-touch ceiling. The tint maths must keep
+    // the transparency on the window and stay at or under the ceiling, or the
+    // fullscreen layer blocks every touch that crosses it.
+    run {
+        check("an empty tint attaches nothing", tintFor(0, 0).isEmpty)
+        check(
+            "the strongest tint stays under the Android 12 ceiling",
+            tintFor(40, 60).alpha <= 0.8f,
+            "alpha=${tintFor(40, 60).alpha}"
+        )
+        check("the strongest tint is still visible", tintFor(40, 60).alpha > 0.2f)
+        check("warmth alone still tints", tintFor(0, 34).alpha > 0f)
+        check(
+            "the colour is fully opaque - transparency lives on the window",
+            (tintFor(30, 40).color ushr 24) == 0xFF
+        )
     }
 
     // Regression for "flashlight screen when select preset when game on".

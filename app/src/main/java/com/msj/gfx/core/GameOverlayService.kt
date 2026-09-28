@@ -77,6 +77,8 @@ class GameOverlayService : android.app.Service() {
         tickScope = null
         runCatching { root?.let { wm?.removeView(it) } }
         root = null
+        overlayParams = null
+        screenFlagOn = false
         super.onDestroy()
     }
 
@@ -126,6 +128,18 @@ class GameOverlayService : android.app.Service() {
             x = dp(12f)
             y = dp(64f)
         }
+
+        // "Keep screen awake" rides on the HUD window only while a game session
+        // is actually active - the same bracket the watcher uses for the
+        // wakelock. FLAG_KEEP_SCREEN_ON is the platform's preferred mechanism,
+        // so it is used in addition to the session lock in PowerKeeper, which
+        // covers the case where no window of ours exists. The tick loop keeps
+        // it in step afterwards (see syncScreenFlag).
+        screenFlagOn = SettingsStore.get().keepAwake.value && PowerKeeper.isScreenSessionActive()
+        if (screenFlagOn) {
+            params.flags = params.flags or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+        }
+        overlayParams = params
 
         runCatching { wm?.addView(panel, params) }
         attachDrag(panel, params)
@@ -181,11 +195,31 @@ class GameOverlayService : android.app.Service() {
                         ramView?.setTextColor(
                             if (pct >= 88) Color.rgb(255, 122, 69) else Color.rgb(255, 194, 75)
                         )
+                        // Same cadence as the readouts: the screen-on flag
+                        // follows a session starting or ending within 500ms.
+                        syncScreenFlag()
                     }
                 }
                 delay(500)
             }
         }
+    }
+
+    /**
+     * Keep the HUD window's FLAG_KEEP_SCREEN_ON in step with the game session.
+     *
+     * Only ever called on the main thread, because updateViewLayout is the only
+     * way to change a flag on an attached window and it is not thread-safe.
+     */
+    private fun syncScreenFlag() {
+        val want = SettingsStore.get().keepAwake.value && PowerKeeper.isScreenSessionActive()
+        if (want == screenFlagOn) return
+        val params = overlayParams ?: return
+        val view = root ?: return
+        val flag = WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+        params.flags = if (want) params.flags or flag else params.flags and flag.inv()
+        runCatching { wm?.updateViewLayout(view, params) }
+        screenFlagOn = want
     }
 
     private fun label(text: String, sp: Float, color: Int) = TextView(this).apply {
@@ -235,6 +269,12 @@ class GameOverlayService : android.app.Service() {
 
     private var msView: TextView? = null
     private var ramView: TextView? = null
+
+    /** The live window params, kept so the screen-on flag can be toggled in place. */
+    private var overlayParams: WindowManager.LayoutParams? = null
+
+    /** Whether the window currently carries FLAG_KEEP_SCREEN_ON. Main thread only. */
+    private var screenFlagOn = false
 
     companion object {
         private const val CH_ID = "msj_gfx_hud"

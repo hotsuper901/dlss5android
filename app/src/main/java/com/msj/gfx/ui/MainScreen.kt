@@ -67,8 +67,12 @@ private enum class Tab(val label: String, val icon: ImageVector) {
 fun MsjRoot(
     overlayGranted: Boolean,
     usageGranted: Boolean,
+    batteryExempt: Boolean,
+    writeSettings: Boolean,
     onRequestOverlay: () -> Unit,
     onRequestUsageAccess: () -> Unit,
+    onRequestBatteryExemption: () -> Unit,
+    onOpenOemAutostart: () -> Unit,
     onToggleBooster: (Boolean) -> Unit,
     onToggleOverlay: (Boolean) -> Unit,
     onOpenGame: (String) -> Unit
@@ -80,6 +84,7 @@ fun MsjRoot(
     val preset by settings.preset.collectAsState()
     val forceRefresh by settings.forceRefresh.collectAsState()
     val keepAwake by settings.keepAwake.collectAsState()
+    val cpuWakeLock by settings.cpuWakeLock.collectAsState()
     val aggressiveTrim by settings.aggressiveTrim.collectAsState()
     val tintDepth by settings.tintDepth.collectAsState()
     val tintWarmth by settings.tintWarmth.collectAsState()
@@ -140,10 +145,16 @@ fun MsjRoot(
                     onToggleAutoTrim = settings::setAutoTrim,
                     forceRefresh = forceRefresh,
                     keepAwake = keepAwake,
+                    cpuWakeLock = cpuWakeLock,
                     aggressiveTrim = aggressiveTrim,
+                    batteryExempt = batteryExempt,
+                    canWrite = writeSettings,
                     onToggleForceRefresh = settings::setForceRefresh,
                     onToggleKeepAwake = settings::setKeepAwake,
-                    onToggleAggressiveTrim = settings::setAggressiveTrim
+                    onToggleCpuWakeLock = settings::setCpuWakeLock,
+                    onToggleAggressiveTrim = settings::setAggressiveTrim,
+                    onRequestBatteryExemption = onRequestBatteryExemption,
+                    onOpenOemAutostart = onOpenOemAutostart
                 )
                 Tab.GAMES -> GamesTab(vm, onOpenGame)
                 Tab.ENHANCE -> EnhanceTab(
@@ -193,14 +204,17 @@ private fun DashTab(
     onBoost: () -> Unit, onResync: () -> Unit,
     onToggleBooster: (Boolean) -> Unit,
     onPreset: (Preset) -> Unit, onToggleAutoTrim: (Boolean) -> Unit,
-    forceRefresh: Boolean, keepAwake: Boolean, aggressiveTrim: Boolean,
+    forceRefresh: Boolean, keepAwake: Boolean, cpuWakeLock: Boolean,
+    aggressiveTrim: Boolean, batteryExempt: Boolean,
+    /** Re-read by the activity on every resume; a `remember` here went stale. */
+    canWrite: Boolean,
     onToggleForceRefresh: (Boolean) -> Unit,
     onToggleKeepAwake: (Boolean) -> Unit,
-    onToggleAggressiveTrim: (Boolean) -> Unit
+    onToggleCpuWakeLock: (Boolean) -> Unit,
+    onToggleAggressiveTrim: (Boolean) -> Unit,
+    onRequestBatteryExemption: () -> Unit,
+    onOpenOemAutostart: () -> Unit
 ) {
-    // Special access, not a runtime permission, and the peak-refresh override
-    // silently no-ops without it - so surface the state rather than pretending.
-    var canWrite by remember { mutableStateOf(DisplayController.canWriteSettings()) }
     val maxHz = remember { DisplayController.maxRefreshHz() }
     val clipboard = LocalClipboardManager.current
     Column(
@@ -329,9 +343,21 @@ private fun DashTab(
         }
         ToggleRow("Keep screen awake", "Holds the display on during a match", keepAwake, onToggleKeepAwake)
         ToggleRow(
+            "CPU wakelock in game",
+            "Stops Android freezing the booster mid-match; released when you leave the game",
+            cpuWakeLock, onToggleCpuWakeLock
+        )
+        ToggleRow(
             "Aggressive trim in game",
             "Trims background RAM the moment a game comes forward, releases on exit",
             aggressiveTrim, onToggleAggressiveTrim
+        )
+
+        Spacer(Modifier.height(16.dp))
+        BatteryKeeperCard(
+            exempt = batteryExempt,
+            onRequestExemption = onRequestBatteryExemption,
+            onOemSettings = onOpenOemAutostart
         )
 
         Spacer(Modifier.height(18.dp))
@@ -695,6 +721,77 @@ private fun Notice(text: String, tint: Color) {
     ) {
         Text("!  ", color = tint, fontWeight = FontWeight.Black)
         Text(text, color = Body, fontSize = 12.sp, lineHeight = 18.sp)
+    }
+}
+
+/**
+ * The battery-optimisation exemption, shown as state rather than a switch.
+ *
+ * A switch would be wrong here: there is no public API to put the app back
+ * under optimisation, and the OFF position would be a lie. So the card reports
+ * the real status read from the power manager and offers the system dialog.
+ */
+@Composable
+private fun BatteryKeeperCard(
+    exempt: Boolean,
+    onRequestExemption: () -> Unit,
+    onOemSettings: () -> Unit
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(Panel)
+            .border(
+                1.dp,
+                if (exempt) OkGreen.copy(alpha = 0.35f) else WarnYellow.copy(alpha = 0.35f),
+                RoundedCornerShape(14.dp)
+            )
+            .padding(14.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Battery optimisation",
+                    fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Ink
+                )
+                Text(
+                    if (exempt) "Exempt - Doze will not freeze the booster"
+                    else "Not exempt - Android can freeze the booster and stop detection",
+                    fontSize = 11.sp,
+                    color = if (exempt) OkGreen else WarnYellow,
+                    lineHeight = 16.sp
+                )
+            }
+            if (exempt) {
+                Text("EXEMPT", fontSize = 11.sp, color = OkGreen, fontWeight = FontWeight.Black)
+            } else {
+                TextButton(onClick = onRequestExemption) {
+                    Text("FIX", color = NeonCyan, fontWeight = FontWeight.Black, fontSize = 12.sp)
+                }
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            if (exempt)
+                "The foreground service and the in-game wakelock are both honoured now. " +
+                    "Some manufacturers still run a cleaner of their own - the button below opens it."
+            else
+                "A foreground service alone does not survive Doze: Android ignores wakelocks for " +
+                    "apps that are not exempt, which is how the booster gets frozen between matches. " +
+                    "This is the one system-level grant the app asks for.",
+            fontSize = 10.sp, color = Muted, lineHeight = 15.sp
+        )
+        Spacer(Modifier.height(6.dp))
+        TextButton(onClick = onOemSettings, modifier = Modifier.fillMaxWidth()) {
+            Text("MANUFACTURER AUTOSTART SETTINGS", fontSize = 10.sp, color = NeonCyan)
+        }
+        Text(
+            "Xiaomi, Huawei, Oppo, Vivo, OnePlus and Samsung each add a second battery screen of " +
+                "their own. This opens it directly where the build exposes it.",
+            fontSize = 10.sp, color = Muted, lineHeight = 15.sp
+        )
     }
 }
 
@@ -1259,8 +1356,12 @@ private fun AboutTab() {
         listOf(
             "SYSTEM_ALERT_WINDOW - draws the HUD on top of the game",
             "FOREGROUND_SERVICE_SPECIAL_USE - keeps the booster alive so Android does not force-close it",
+            "POST_NOTIFICATIONS - the service's ongoing notification, nothing else",
             "RECEIVE_BOOT_COMPLETED - restarts the booster after a reboot, only if you left it on",
-            "QUERY_ALL_PACKAGES - detects which supported game is installed"
+            "PACKAGE_USAGE_STATS - the only way to see which game is on screen",
+            "QUERY_ALL_PACKAGES - detects which supported game is installed",
+            "WAKE_LOCK - held only while a game is in front, released the moment you leave it",
+            "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS - you grant this through a system dialog, and only if you tap FIX"
         ).forEach {
             Row(Modifier.padding(vertical = 4.dp)) {
                 Text("›  ", color = OkGreen, fontWeight = FontWeight.Black)

@@ -18,9 +18,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.msj.gfx.core.CoolerService
+import com.msj.gfx.core.DisplayController
 import com.msj.gfx.core.GameCatalog
 import com.msj.gfx.core.GameOverlayService
 import com.msj.gfx.core.MemoryTools
+import com.msj.gfx.core.PowerKeeper
 import com.msj.gfx.core.SettingsStore
 import com.msj.gfx.ui.MsjRoot
 import com.msj.gfx.ui.MsjTheme
@@ -36,14 +38,25 @@ class MainActivity : ComponentActivity() {
 
     private data class Perms(
         val overlay: Boolean = false,
-        val usage: Boolean = false
+        val usage: Boolean = false,
+        /** Battery-optimisation exemption: a system state, re-read in onResume. */
+        val batteryExempt: Boolean = false,
+        /** "Modify system settings" (WRITE_SETTINGS): another special access. */
+        val writeSettings: Boolean = false
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         SettingsStore.get().markRun()
-        perms = Perms(overlay = overlayGrantedNow(), usage = false)
+        perms = Perms(
+            overlay = overlayGrantedNow(),
+            usage = false,
+            // One binder call at launch, same class of check as
+            // canDrawOverlays above. Live values are re-read in onResume.
+            batteryExempt = PowerKeeper.isBatteryExempt(),
+            writeSettings = DisplayController.canWriteSettings()
+        )
 
         setContent {
             MsjTheme {
@@ -53,6 +66,8 @@ class MainActivity : ComponentActivity() {
                 MsjRoot(
                     overlayGranted = p.overlay,
                     usageGranted = p.usage,
+                    batteryExempt = p.batteryExempt,
+                    writeSettings = p.writeSettings,
                     onRequestOverlay = ::requestOverlay,
                     onRequestUsageAccess = {
                         runCatching { startActivity(GameCatalog.usageAccessIntent()) }
@@ -64,6 +79,8 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                     },
+                    onRequestBatteryExemption = { PowerKeeper.requestExemption() },
+                    onOpenOemAutostart = { PowerKeeper.openOemAutostart() },
                     onToggleBooster = { on ->
                         SettingsStore.get().setBooster(on)
                         if (on) CoolerService.start(this) else CoolerService.stop(this)
@@ -97,14 +114,30 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         // The user just came back from Settings, possibly with new grants.
-        // hasUsageAccess() is a binder call plus a cursor walk, so it goes to a
-        // background thread - doing it inline here is launch-time jank.
+        // Every special access this app asks for is re-read here, overlay
+        // included. Only onCreate used to read canDrawOverlays, so granting
+        // "Display over other apps" while the app was alive stayed invisible
+        // until the process was restarted - reported as "must force close the
+        // app before it detects the permission".
         lifecycleScope.launch {
+            // Binder calls and a cursor walk; never on the main thread.
+            val overlay = withContext(Dispatchers.Default) { overlayGrantedNow() }
             val usage = withContext(Dispatchers.Default) { MemoryTools.hasUsageAccess() }
-            perms = Perms(overlay = perms.overlay, usage = usage)
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && perms.overlay) {
-            if (SettingsStore.get().overlayOn.value) GameOverlayService.start(this)
+            val exempt = withContext(Dispatchers.Default) { PowerKeeper.isBatteryExempt() }
+            val write = withContext(Dispatchers.Default) { DisplayController.canWriteSettings() }
+            perms = Perms(
+                overlay = overlay,
+                usage = usage,
+                batteryExempt = exempt,
+                writeSettings = write
+            )
+
+            // If the HUD toggle was stored as on before the user left for
+            // Settings, the arriving grant is the missing half - bring the
+            // service up now instead of making them flip the switch again.
+            if (overlay && SettingsStore.get().overlayOn.value) {
+                GameOverlayService.start(this@MainActivity)
+            }
         }
     }
 

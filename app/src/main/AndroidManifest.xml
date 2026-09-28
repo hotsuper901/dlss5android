@@ -8,6 +8,13 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Battery-optimisation exemption. Doze ignores app wakelocks unless the
+         app is exempt, so this is what makes the in-game wakelock meaningful.
+         Nothing is granted silently: the dashboard button opens the system
+         dialog and the user decides. -->
+    <uses-permission
+        android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"
+        tools:ignore="BatteryLife" />
     <!-- Special access, granted by the user in Settings. Without it Android
          5.1+ gives a normal app zero visibility into other running apps. -->
     <uses-permission

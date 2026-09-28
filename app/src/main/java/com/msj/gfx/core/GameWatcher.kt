@@ -6,6 +6,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -28,6 +29,12 @@ class GameWatcher(
     private var job: Job? = null
     private var lookJob: Job? = null
     private var boostJob: Job? = null
+
+    /**
+     * Watches the two keep-alive toggles so flipping either one mid-match takes
+     * effect immediately rather than at the next launch.
+     */
+    private var powerJob: Job? = null
 
     /**
      * The in-flight [applyLook], cancelled before a new one starts.
@@ -101,12 +108,18 @@ class GameWatcher(
         // applyEnhancePolicy() is guarded by `applied`, so a look picked from
         // the UI mid-session would otherwise sit there doing nothing until the
         // next game launch. Collect the flow and push immediately instead.
+        //
+        // Note the shape: lookJob, boostJob and powerJob are siblings. They used
+        // to be nested, and since collect() never returns, the code that started
+        // the brightness collector was unreachable - the slider only ever took
+        // effect on the next launch. One assignment per job, all at this level.
         lookJob = scope.launch(Dispatchers.Default) {
             runCatching {
                 SettingsStore.get().look.collect { _ ->
                     if (applied) applyLook()
                 }
             }
+        }
 
         // The brightness slider is the only thing that may move luminance, and
         // only because the user moved it.
@@ -117,6 +130,19 @@ class GameWatcher(
                 }
             }
         }
+
+        // Same deal for the keep-alive switches: flipping "CPU wakelock" or
+        // "Keep screen awake" while a match is running has to acquire or drop
+        // the lock right then, not on the next launch.
+        powerJob = scope.launch(Dispatchers.Default) {
+            runCatching {
+                combine(
+                    SettingsStore.get().keepAwake,
+                    SettingsStore.get().cpuWakeLock
+                ) { _, _ -> Unit }.collect {
+                    if (applied) applyPowerPolicy()
+                }
+            }
         }
     }
 
@@ -131,6 +157,10 @@ class GameWatcher(
             _current.value = null
             _foregroundPkg.value = null
             _hit.value = null
+            // Losing Usage access mid-match is a teardown event like any other.
+            // Without this the tint, the refresh pin and the wakelocks all
+            // stayed applied with no detector left alive to release them.
+            releaseEnhancePolicy()
             return
         }
 
@@ -176,10 +206,25 @@ class GameWatcher(
         if (store.aggressiveTrim.value) {
             runCatching { MemoryTools.trim() }
         }
+        applyPowerPolicy()
         applyLook()
         // Boost, if the user asked for one, comes up on game entry - this is
         // an explicit setting, unlike luminance as a side effect of a look.
         applyBrightnessBoost()
+    }
+
+    /**
+     * Acquire or drop the keep-alive locks to match the current toggles.
+     *
+     * Called on game entry, and again whenever a toggle moves while a game is
+     * open (see powerJob in start()). The locks are bracketed by the session -
+     * off-session they are released, because a wakelock held at idle is the
+     * single fastest way to earn a battery complaint.
+     */
+    private fun applyPowerPolicy() {
+        val store = SettingsStore.get()
+        PowerKeeper.setCpuAwake(store.cpuWakeLock.value)
+        PowerKeeper.setScreenAwake(store.keepAwake.value)
     }
 
     /**
@@ -303,6 +348,8 @@ class GameWatcher(
         // the user zeroed the slider mid-game the old check skipped the restore
         // and left the panel stuck in forced manual brightness.
         releaseBrightness()
+        // Session over, so both keep-alive locks go with it.
+        PowerKeeper.releaseAll()
     }
 
     companion object {
@@ -312,6 +359,10 @@ class GameWatcher(
 
     fun stop() {
         releaseEnhancePolicy()
+        // Belt and braces: releaseEnhancePolicy only fires when `applied`, and
+        // a watcher stopped after the service was torn down must not leave a
+        // lock behind under any interleaving.
+        PowerKeeper.releaseAll()
         job?.cancel()
         job = null
         applyJob?.cancel()
@@ -320,6 +371,8 @@ class GameWatcher(
         lookJob = null
         boostJob?.cancel()
         boostJob = null
+        powerJob?.cancel()
+        powerJob = null
         previousPkg = null
         previous = null
         _current.value = null

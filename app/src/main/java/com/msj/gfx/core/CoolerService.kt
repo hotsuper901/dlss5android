@@ -89,6 +89,11 @@ class CoolerService : Service() {
 
     override fun onDestroy() {
         runCatching { watcher.stop() }
+        // The watcher releases on its way out, but a service being torn down by
+        // the platform may not get to run its own coroutine cancellation
+        // cleanly. Releasing unconditionally here means a dead service can
+        // never leave a wakelock holding the CPU up.
+        runCatching { PowerKeeper.releaseAll() }
         monitorJob?.cancel()
         watcherJob?.cancel()
         scope.cancel()

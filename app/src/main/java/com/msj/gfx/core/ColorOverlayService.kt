@@ -38,21 +38,65 @@ import com.msj.gfx.R
  * and re-presentation, which costs 50-150ms and is unusable for play.
  */
 /**
- * When does the overlay window need adding or removing at all?
+ * What to do with the overlay window when a new tint arrives.
  *
- * Split out as a pure function so the answer is testable off-device. The
- * invariant it encodes is the whole point of the fix: a change of *colour* must
- * never require a new window, because re-adding a fullscreen overlay is what
- * flashes over a running game.
+ * Split out as a pure decision so the answer is testable off-device. The
+ * invariant it encodes is the whole point of the original flash fix: a change
+ * of *colour* must never require a new window, because re-adding a fullscreen
+ * overlay is what flashes over a running game. The one case that removes the
+ * window is the tint going fully empty - leaving an invisible fullscreen
+ * system window attached would still cost a composition pass every frame.
  */
 internal object OverlayWindowPolicy {
-    /**
-     * @param hasView whether a window is currently attached
-     * @param currentColor the colour it is showing, or null if unknown
-     * @param want the colour being asked for
-     */
-    fun needsRebuild(hasView: Boolean, currentColor: Int?, want: Int): Boolean =
-        !hasView && want != Color.TRANSPARENT
+
+    enum class Action { NONE, ATTACH, RECOLOR, DETACH }
+
+    fun decide(hasView: Boolean, want: WindowTint): Action = when {
+        !hasView && want.isEmpty -> Action.NONE
+        !hasView -> Action.ATTACH
+        want.isEmpty -> Action.DETACH
+        else -> Action.RECOLOR
+    }
+}
+
+/**
+ * A tint, split into the two pieces Android reads separately: an opaque RGB
+ * colour and the window's own alpha.
+ *
+ * Android 12's untrusted-touch protection is why they cannot share one field.
+ * TYPE_APPLICATION_OVERLAY windows are never trusted, and the system blocks
+ * touches passing through them when the combined obscuring opacity of those
+ * windows exceeds the system ceiling - 0.8 by default, exposed as
+ * InputManager.getMaximumObscuringOpacityForTouch(). That opacity is computed
+ * from LayoutParams.alpha, NOT from the background colour's alpha. A tint whose
+ * transparency lived only in the colour byte therefore measured as an opaque
+ * window and swallowed every touch that crossed it - in the game and in this
+ * app - even with FLAG_NOT_TOUCHABLE set. Keeping the transparency on the
+ * window makes the measurement match what the eye sees.
+ */
+internal data class WindowTint(val color: Int, val alpha: Float) {
+    val isEmpty: Boolean get() = alpha <= 0f
+}
+
+/** The tint maths as a pure function, so it can be checked without a device. */
+internal fun tintFor(depth: Int, warmth: Int): WindowTint {
+    val d = depth.coerceIn(0, 40)
+    val w = warmth.coerceIn(-60, 60)
+    // Depth darkens the frame a little; warmth tints it amber or blue.
+    // When both are zero we attach nothing at all rather than leave a fully
+    // transparent fullscreen window up, because an empty window is still a
+    // compositing cost on the SoC.
+    if (d == 0 && w == 0) return WindowTint(Color.BLACK, 0f)
+    // Alpha used to come from depth alone, so a warmth-only setting had alpha
+    // 0 and tinted nothing at all - the warmth slider looked dead until you
+    // also dragged depth. Warmth now contributes its own floor.
+    val fromDepth = d * 2.55f
+    val fromWarmth = kotlin.math.abs(w) * 1.6f
+    val level = kotlin.math.max(fromDepth, fromWarmth).toInt().coerceIn(0, 110)
+    val shift = (w * 2f).toInt().coerceIn(-60, 60)
+    val r = (128 + shift).coerceIn(0, 255)
+    val b = (128 - shift).coerceIn(0, 255)
+    return WindowTint(Color.rgb(r, 128, b), level / 255f)
 }
 
 class ColorOverlayService : android.app.Service() {
@@ -140,6 +184,7 @@ class ColorOverlayService : android.app.Service() {
     override fun onDestroy() {
         runCatching { overlay?.let { wm?.removeView(it) } }
         overlay = null
+        currentParams = null
         currentTag = null
         foregroundStarted = false
         lastDepth = 0
@@ -151,51 +196,62 @@ class ColorOverlayService : android.app.Service() {
      * Pushes the current depth/warmth into the overlay, without ever tearing
      * the window down to do it.
      *
-     * This used to be inverted, and the inversion was the bug. The old code
-     * took the cheap path when the colour was *unchanged* and the expensive
-     * path when it *changed*:
+     * Two invariants, both learned the hard way:
      *
-     *     if (current != null && want == currentTag) { setBackgroundColor; return }
-     *     if (current != null) { removeView(current) }   // colour changed
-     *     ... addView(new View) ...
+     *  - A change of *colour* must never re-add the window. Removing and
+     *    re-adding a fullscreen overlay makes SurfaceFlinger destroy and
+     *    recreate the surface, which is a white flash and a dropped frame over
+     *    a running game. A recolour is a drawable swap plus a params update.
+     *  - The window's alpha has to move with the colour, because Android 12+
+     *    measures *that* value (not the colour's alpha) to decide whether
+     *    touches may pass through. See [WindowTint].
      *
-     * Removing and re-adding a fullscreen TYPE_APPLICATION_OVERLAY makes
-     * SurfaceFlinger destroy and recreate the surface. Over a running game that
-     * is a white flash and a dropped frame - precisely "attach a game, select a
-     * preset, the depth flashes". It also threw away the View and built a fresh
-     * one, contradicting the field comment above that promised the view is
-     * created once and re-parented.
-     *
-     * Changing a background colour on a view that is already attached is a
-     * drawable swap: no relayout, no surface churn, no flash. So that is now
-     * the only path, and the view is genuinely created once.
+     * The only case that removes and re-adds is a clean re-attach after the
+     * platform refused an update; see onConfigurationChanged.
      */
     private fun apply(depth: Int, warmth: Int) {
-        val want = colorFor(depth, warmth)
+        val want = tintFor(depth, warmth)
 
-        val existing = overlay
+        // Re-applying the same tint is the common case while a slider moves -
+        // nothing to change and no binder call worth making.
+        if (want == currentTag) return
 
-        if (!OverlayWindowPolicy.needsRebuild(existing != null, currentTag, want)) {
-            // A window is already attached, or there is nothing worth showing.
-            // Either way this is a recolour, never a rebuild.
-            if (existing != null && want != currentTag) {
-                runCatching { existing.setBackgroundColor(want) }
+        when (OverlayWindowPolicy.decide(overlay != null, want)) {
+            OverlayWindowPolicy.Action.NONE -> return
+
+            OverlayWindowPolicy.Action.ATTACH -> {
+                wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+                val view = View(this)
+                view.setBackgroundColor(want.color)
+                val params = buildParams(want.alpha)
+                runCatching { wm?.addView(view, params) }
+                    .onFailure {
+                        // No window is better than a window we failed to add;
+                        // leave overlay null so the next apply() retries cleanly.
+                        return
+                    }
+                overlay = view
+                currentParams = params
                 currentTag = want
             }
-            return
-        }
 
-        wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        val view = View(this)
-        view.setBackgroundColor(want)
-        runCatching { wm?.addView(view, buildParams()) }
-            .onFailure {
-                // No window is better than a window we failed to add; leave
-                // overlay null so the next apply() retries cleanly.
-                return
+            OverlayWindowPolicy.Action.RECOLOR -> {
+                val view = overlay ?: return
+                val params = currentParams ?: return
+                runCatching { view.setBackgroundColor(want.color) }
+                params.alpha = clampedAlpha(want.alpha)
+                runCatching { wm?.updateViewLayout(view, params) }
+                currentTag = want
             }
-        overlay = view
-        currentTag = want
+
+            OverlayWindowPolicy.Action.DETACH -> {
+                val view = overlay ?: return
+                runCatching { wm?.removeView(view) }
+                overlay = null
+                currentParams = null
+                currentTag = null
+            }
+        }
     }
 
     /**
@@ -217,8 +273,13 @@ class ColorOverlayService : android.app.Service() {
      *  - Rotation and foldables change the bounds, so the params are rebuilt
      *    on configuration change rather than left at whatever the screen was
      *    when the service started.
+     *
+     * [alpha] is the window's own transparency, and on Android 12+ it is also
+     * the value the input system reads before allowing touches through. It is
+     * clamped to the system ceiling in here so an attach can never produce a
+     * window that blocks input.
      */
-    private fun buildParams(): WindowManager.LayoutParams {
+    private fun buildParams(alpha: Float): WindowManager.LayoutParams {
         val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         val (w, h) = runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -253,6 +314,12 @@ class ColorOverlayService : android.app.Service() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.FILL
+            // Android 12+ blocks touches that pass through an untrusted
+            // overlay when the window's obscuring opacity exceeds the system
+            // ceiling. The default 1.0 exceeds it, which is what made every
+            // touch die behind the tint. Keep this on the window, never in
+            // the colour - see WindowTint.
+            this.alpha = clampedAlpha(alpha)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 layoutInDisplayCutoutMode =
                     WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
@@ -268,38 +335,42 @@ class ColorOverlayService : android.app.Service() {
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)
         val v = overlay ?: return
-        runCatching { wm?.updateViewLayout(v, buildParams()) }
+        val params = buildParams(currentTag?.alpha ?: 0f)
+        runCatching { wm?.updateViewLayout(v, params) }
+            .onSuccess { currentParams = params }
             .onFailure {
                 // Some OEM builds refuse updateViewLayout across a display
                 // change; fall back to a clean re-add.
                 runCatching { wm?.removeView(v) }
                 overlay = null
+                currentParams = null
                 currentTag = null
                 apply(lastDepth, lastWarmth)
             }
     }
 
-    private fun colorFor(depth: Int, warmth: Int): Int {
-        val d = depth.coerceIn(0, 40)
-        val w = warmth.coerceIn(-60, 60)
-        // Depth darkens the frame a little; warmth tints it amber or blue.
-        // When both are zero we remove the layer entirely rather than leave a
-        // fully transparent fullscreen window up, because an empty window is
-        // still a compositing cost on the SoC.
-        if (d == 0 && w == 0) return Color.TRANSPARENT
-        // Alpha used to come from depth alone, so a warmth-only setting had
-        // alpha 0 and tinted nothing at all - the warmth slider looked dead
-        // until you also dragged depth. Warmth now contributes its own floor.
-        val fromDepth = d * 2.55f
-        val fromWarmth = kotlin.math.abs(w) * 1.6f
-        val alpha = kotlin.math.max(fromDepth, fromWarmth).toInt().coerceIn(0, 110)
-        val shift = (w * 2f).toInt().coerceIn(-60, 60)
-        val r = (128 + shift).coerceIn(0, 255)
-        val b = (128 - shift).coerceIn(0, 255)
-        return Color.argb(alpha, r, 128, b)
-    }
+    /**
+     * The system's untrusted-touch ceiling on window opacity.
+     *
+     * Android 12 introduced it at 0.8 and exposes it through InputManager, so
+     * it is read rather than hardcoded: if a build lowers it, the tint follows.
+     * Before Android 12 the value has no meaning and an opaque window was never
+     * blocked from passing touches through.
+     */
+    private fun maxObscuringAlpha(): Float = runCatching {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            (getSystemService(Context.INPUT_SERVICE) as? android.hardware.input.InputManager)
+                ?.maximumObscuringOpacityForTouch ?: 0.8f
+        } else 1f
+    }.getOrDefault(0.8f)
 
-    private var currentTag: Int? = null
+    /** 0 stays 0 so a fully-off tint is exempt as an invisible window. */
+    private fun clampedAlpha(want: Float): Float = want.coerceIn(0f, maxObscuringAlpha())
+
+    private var currentTag: WindowTint? = null
+
+    /** The params the attached window is running with, so a recolour can update them. */
+    private var currentParams: WindowManager.LayoutParams? = null
 
     private fun hasOverlayPermission(): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this)
